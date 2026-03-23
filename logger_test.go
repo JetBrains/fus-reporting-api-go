@@ -1,0 +1,207 @@
+package fus
+
+import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+var testFUSConfig = &FUSConfig{
+	SendEndpoint: "http://localhost", // overridden per test
+	Salt:         "test-salt",
+}
+
+func newTestLogger(t *testing.T, server *httptest.Server) *Logger {
+	t.Helper()
+	cfg := testFUSConfig
+	if server != nil {
+		cfg = &FUSConfig{SendEndpoint: server.URL, Salt: "test-salt"}
+	}
+	logger, err := NewLogger(
+		RecorderConfig{
+			RecorderID:      "TC",
+			RecorderVersion: 1,
+			ProductCode:     "TCC",
+			BuildVersion:    "0.1.0",
+			DataDir:         t.TempDir(),
+		},
+		WithFUSConfig(cfg),
+		WithClient(NewClient(cfg.SendEndpoint, 0)),
+	)
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+	return logger
+}
+
+func TestLoggerTrackAndFlush(t *testing.T) {
+	var received Report
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	logger := newTestLogger(t, server)
+
+	group := EventGroup{ID: "cli.command", Version: 1, State: false}
+	logger.Track(group, "executed", map[string]any{"command": "run", "subcommand": "start"})
+	logger.Track(group, "executed", map[string]any{"command": "auth", "subcommand": "login"})
+
+	if err := logger.Flush(t.Context()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	if len(received.Events) != 2 {
+		t.Fatalf("received events = %d, want 2", len(received.Events))
+	}
+
+	e := received.Events[0]
+	if e.Recorder.ID != "TC" {
+		t.Errorf("recorder.id = %q, want TC", e.Recorder.ID)
+	}
+	if e.Product != "TCC" {
+		t.Errorf("product = %q, want TCC", e.Product)
+	}
+	if e.Build != "0.1.0" {
+		t.Errorf("build = %q, want 0.1.0", e.Build)
+	}
+	if !strings.HasSuffix(e.IDs["device"], "#C") {
+		t.Errorf("device ID should be anonymized with #C suffix, got %q", e.IDs["device"])
+	}
+	if !strings.HasSuffix(e.Session, "#C") {
+		t.Errorf("session should be anonymized with #C suffix, got %q", e.Session)
+	}
+	if e.Event.ID != "executed" {
+		t.Errorf("event.id = %q, want executed", e.Event.ID)
+	}
+	if e.Event.Data["command"] != "run" {
+		t.Errorf("event.data.command = %v, want run", e.Event.Data["command"])
+	}
+}
+
+func TestLoggerFlushEmpty(t *testing.T) {
+	logger := newTestLogger(t, nil)
+	if err := logger.Flush(t.Context()); err != nil {
+		t.Fatalf("flush empty: %v", err)
+	}
+}
+
+func TestLoggerReBuffersOnFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	logger := newTestLogger(t, server)
+
+	logger.Track(EventGroup{ID: "test", Version: 1}, "test.event", nil)
+
+	err := logger.Flush(t.Context())
+	if err == nil {
+		t.Fatal("expected error from failed flush")
+	}
+
+	// Events should be re-buffered.
+	events, readErr := logger.buffer.ReadAndClear()
+	if readErr != nil {
+		t.Fatalf("read buffer: %v", readErr)
+	}
+	if len(events) != 1 {
+		t.Errorf("re-buffered events = %d, want 1", len(events))
+	}
+}
+
+func TestLoggerMergesIdenticalEvents(t *testing.T) {
+	var received Report
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	logger := newTestLogger(t, server)
+
+	group := EventGroup{ID: "cli.command", Version: 1, State: false}
+	// Track 3 identical events (same group, eventID, data).
+	logger.Track(group, "executed", map[string]any{"command": "run"})
+	logger.Track(group, "executed", map[string]any{"command": "run"})
+	logger.Track(group, "executed", map[string]any{"command": "run"})
+	// Track 1 different event.
+	logger.Track(group, "executed", map[string]any{"command": "build"})
+
+	if err := logger.Flush(t.Context()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	if len(received.Events) != 2 {
+		t.Fatalf("received events = %d, want 2 (3 merged + 1 different)", len(received.Events))
+	}
+	if received.Events[0].Event.Count != 3 {
+		t.Errorf("merged event count = %d, want 3", received.Events[0].Event.Count)
+	}
+	if received.Events[1].Event.Count != 1 {
+		t.Errorf("non-merged event count = %d, want 1", received.Events[1].Event.Count)
+	}
+}
+
+func TestLoggerReBuffersOnlyUnsentEvents(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount++
+		if callCount == 1 {
+			w.WriteHeader(http.StatusNoContent) // first batch succeeds
+		} else {
+			w.WriteHeader(http.StatusBadRequest) // second batch fails
+		}
+	}))
+	defer server.Close()
+
+	logger := newTestLogger(t, server)
+
+	// Track 600 events — will be split into batch of 500 (succeeds) + 100 (fails).
+	group := EventGroup{ID: "test", Version: 1}
+	for i := range 600 {
+		logger.Track(group, "event", map[string]any{"i": i})
+	}
+
+	err := logger.Flush(t.Context())
+	if err == nil {
+		t.Fatal("expected error from partial flush failure")
+	}
+
+	// Only the 100 unsent events should be re-buffered, not all 600.
+	events, readErr := logger.buffer.ReadAndClear()
+	if readErr != nil {
+		t.Fatalf("read buffer: %v", readErr)
+	}
+	if len(events) != 100 {
+		t.Errorf("re-buffered events = %d, want 100 (only unsent batch)", len(events))
+	}
+}
+
+func TestLoggerWithCustomDeviceID(t *testing.T) {
+	logger, err := NewLogger(
+		RecorderConfig{
+			RecorderID:      "TC",
+			RecorderVersion: 1,
+			ProductCode:     "QDJVM",
+			BuildVersion:    "2024.3",
+			DataDir:         t.TempDir(),
+			DeviceID:        "custom-device-id",
+		},
+		WithFUSConfig(testFUSConfig),
+	)
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+
+	if logger.deviceID != "custom-device-id" {
+		t.Errorf("deviceID = %q, want custom-device-id", logger.deviceID)
+	}
+}

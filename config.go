@@ -1,0 +1,245 @@
+package fus
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type RegionCode string
+
+const (
+	RegionAll RegionCode = "ALL"
+	RegionCN  RegionCode = "CN"
+)
+
+const (
+	defaultSendEndpoint  = "https://analytics.services.jetbrains.com/fus/v5/send/"
+	configURLTemplateAll = "https://resources.jetbrains.com/storage/fus/config/v4/%s/%s.json"
+	configURLTemplateCN  = "https://resources.jetbrains.com.cn/storage/fus/config/v4/%s/%s.json"
+	configCacheFile      = "fus_config.json"
+	configCacheTTL       = 10 * time.Minute
+	configFetchTimeout   = 5 * time.Second
+)
+
+type FUSConfig struct {
+	SendEndpoint string `json:"send_endpoint"`
+	Salt         string `json:"salt"`
+	SaltRevision int    `json:"salt_revision"`
+	FetchedAt    int64  `json:"fetched_at"`
+}
+
+// LoadOrFetchConfig returns cached config if fresh, otherwise fetches from the server.
+// Falls back to a default config on any failure.
+func LoadOrFetchConfig(recorderID, productCode, productVersion, dataDir string, region RegionCode) *FUSConfig {
+	cachePath := filepath.Join(dataDir, configCacheFile)
+
+	if cfg, err := loadCachedConfig(cachePath); err == nil {
+		if time.Since(time.Unix(cfg.FetchedAt, 0)) < configCacheTTL {
+			return cfg
+		}
+	}
+
+	cfg, err := fetchConfig(recorderID, productCode, productVersion, region)
+	if err != nil {
+		return defaultConfig()
+	}
+
+	cfg.FetchedAt = time.Now().Unix()
+	if data, err := json.Marshal(cfg); err == nil {
+		_ = os.MkdirAll(dataDir, 0o700)
+		_ = os.WriteFile(cachePath, data, 0o600)
+	}
+
+	return cfg
+}
+
+func loadCachedConfig(path string) (*FUSConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var cfg FUSConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+type remoteConfigResponse struct {
+	ProductCode string                `json:"productCode"`
+	Versions    []remoteConfigVersion `json:"versions"`
+}
+
+type remoteConfigVersion struct {
+	MajorBuildVersionBorders *versionBorders       `json:"majorBuildVersionBorders"`
+	Endpoints                remoteConfigEndpoints  `json:"endpoints"`
+	Options                  remoteConfigOptions    `json:"options"`
+}
+
+type versionBorders struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type remoteConfigEndpoints struct {
+	Send string `json:"send"`
+}
+
+type remoteConfigOptions struct {
+	IDSalt         string `json:"id_salt"`
+	IDSaltRevision string `json:"id_salt_revision"`
+}
+
+func FetchTestConfig(recorderID, productCode string) (*FUSConfig, error) {
+	return fetchConfig("test/"+recorderID, productCode, "", RegionAll)
+}
+
+func configURLTemplate(region RegionCode) string {
+	if region == RegionCN {
+		return configURLTemplateCN
+	}
+	return configURLTemplateAll
+}
+
+func fetchConfig(recorderID, productCode, productVersion string, region RegionCode) (*FUSConfig, error) {
+	url := fmt.Sprintf(configURLTemplate(region), recorderID, productCode)
+
+	client := &http.Client{Timeout: configFetchTimeout}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("fetch fus config: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fus config: status %d", resp.StatusCode)
+	}
+
+	var remote remoteConfigResponse
+	if err := json.NewDecoder(resp.Body).Decode(&remote); err != nil {
+		return nil, fmt.Errorf("decode fus config: %w", err)
+	}
+
+	v := findMatchingVersion(remote.Versions, productVersion)
+
+	cfg := defaultConfig()
+	if v != nil {
+		if v.Endpoints.Send != "" {
+			cfg.SendEndpoint = v.Endpoints.Send
+		}
+		if v.Options.IDSalt != "" {
+			cfg.Salt = v.Options.IDSalt
+		}
+		if v.Options.IDSaltRevision != "" {
+			cfg.SaltRevision, _ = strconv.Atoi(v.Options.IDSaltRevision)
+		}
+	}
+
+	return cfg, nil
+}
+
+// findMatchingVersion selects the first version whose majorBuildVersionBorders
+// accepts the product version. Falls back to the first version if none match.
+func findMatchingVersion(versions []remoteConfigVersion, productVersion string) *remoteConfigVersion {
+	if len(versions) == 0 {
+		return nil
+	}
+
+	build := parseMajorVersion(productVersion)
+	if !isValidMajorVersion(build) {
+		return &versions[0]
+	}
+
+	for i := range versions {
+		v := &versions[i]
+		if v.MajorBuildVersionBorders == nil {
+			continue
+		}
+		if acceptVersion(v.MajorBuildVersionBorders, productVersion) {
+			return v
+		}
+	}
+
+	return &versions[0]
+}
+
+// acceptVersion checks if the product version falls within [from, to).
+func acceptVersion(borders *versionBorders, current string) bool {
+	build := parseMajorVersion(current)
+	if !isValidMajorVersion(build) {
+		return false
+	}
+
+	from := parseMajorVersion(borders.From)
+	to := parseMajorVersion(borders.To)
+
+	if !isValidMajorVersion(from) && !isValidMajorVersion(to) {
+		return false
+	}
+
+	if isValidMajorVersion(from) && compareMajorVersions(from, build) > 0 {
+		return false
+	}
+	if isValidMajorVersion(to) && compareMajorVersions(to, build) <= 0 {
+		return false
+	}
+
+	return true
+}
+
+func parseMajorVersion(s string) []int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ".")
+	result := make([]int, len(parts))
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			n = 0
+		}
+		result[i] = n
+	}
+	if len(result) == 1 {
+		result = append(result, 0)
+	}
+	return result
+}
+
+func isValidMajorVersion(v []int) bool {
+	return len(v) > 0 && v[0] > 0
+}
+
+func compareMajorVersions(a, b []int) int {
+	maxLen := len(a)
+	if len(b) > maxLen {
+		maxLen = len(b)
+	}
+	for i := range maxLen {
+		va, vb := 0, 0
+		if i < len(a) {
+			va = a[i]
+		}
+		if i < len(b) {
+			vb = b[i]
+		}
+		if va != vb {
+			return va - vb
+		}
+	}
+	return 0
+}
+
+func defaultConfig() *FUSConfig {
+	return &FUSConfig{
+		SendEndpoint: defaultSendEndpoint,
+		Salt:         "default-fus-salt",
+	}
+}
