@@ -20,6 +20,7 @@ type Logger struct {
 	fusConfig *FUSConfig
 	buffer    *Buffer
 	client    *Client
+	validator *Validator
 	deviceID  string
 	session   string
 	bucket    int
@@ -36,6 +37,14 @@ func WithFUSConfig(cfg *FUSConfig) LoggerOption {
 // WithClient overrides the default HTTP client.
 func WithClient(c *Client) LoggerOption {
 	return func(l *Logger) { l.client = c }
+}
+
+// WithValidator installs the client-side scheme validator. Required by
+// NewLogger — every event is rewritten so that only scheme-approved keys
+// and values reach the wire, and events whose group is registered but out
+// of build/version range are dropped.
+func WithValidator(v *Validator) LoggerOption {
+	return func(l *Logger) { l.validator = v }
 }
 
 func NewLogger(cfg RecorderConfig, opts ...LoggerOption) (*Logger, error) {
@@ -78,6 +87,9 @@ func NewLogger(cfg RecorderConfig, opts ...LoggerOption) (*Logger, error) {
 	if l.fusConfig.Salt == "" {
 		return nil, errors.New("fus: config salt is empty; refusing to emit events with predictable hashes")
 	}
+	if l.validator == nil {
+		return nil, errors.New("fus: validator is required; pass WithValidator(fus.NewValidator(scheme))")
+	}
 	if l.client == nil {
 		l.client = NewClient(l.fusConfig.SendEndpoint, defaultTimeout)
 		l.client.userAgent = cfg.ProductCode + "/" + cfg.BuildVersion
@@ -91,9 +103,14 @@ func NewLogger(cfg RecorderConfig, opts ...LoggerOption) (*Logger, error) {
 }
 
 // Track buffers an event to disk. Failures are silent. Events with more than
-// MaxDataFields entries are dropped. String fields are sanitized for LION v4
-// wire safety: ' " dropped, CR/LF/TAB and separator chars replaced, non-ASCII
-// runes replaced with ?.
+// MaxDataFields entries are dropped.
+//
+// Pipeline: raw event ─▶ validator (if configured) ─▶ escaper ─▶ disk buffer.
+// The validator rewrites the event to match the registered scheme, sentinel-
+// replacing unknown keys / unmatched values and dropping events out of a
+// group's build or version range. The escaper then normalizes string fields
+// for the LION v4 wire format (drops ' ", replaces CR/LF/TAB and separator
+// chars, non-ASCII runes → ?).
 func (l *Logger) Track(group EventGroup, eventID string, data map[string]any) {
 	if len(data) > MaxDataFields {
 		return
@@ -120,12 +137,21 @@ func (l *Logger) Track(group EventGroup, eventID string, data map[string]any) {
 		Event:    EventAction{ID: eventID, Data: data, Count: 1},
 	}
 
+	if l.validator != nil {
+		validated, drop := l.validator.Validate(event)
+		if drop {
+			return
+		}
+		event = validated
+	}
+
 	event = escapeEvent(event)
 	_ = l.buffer.Append(event)
 }
 
 // escapeEvent applies StatisticsEventEscaper rules to every caller-sourced
-// string field in a LION v4 event.
+// string field in a LION v4 event. Safe to call on already-validated events:
+// all validator sentinels are escape-clean, so escaping them is a no-op.
 func escapeEvent(e LogEvent) LogEvent {
 	e.Recorder.ID = Escape(e.Recorder.ID)
 	e.Product = Escape(e.Product)

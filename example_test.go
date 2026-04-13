@@ -22,6 +22,49 @@ func TestExamplePayload(t *testing.T) {
 	}))
 	defer server.Close()
 
+	// Real scheme: demonstrates how a product declares its groups/events/fields
+	// in Go. The same Scheme value is both passed to NewValidator at runtime
+	// and marshalled to schema.json for AP metadata registration.
+	scheme := &fus.Scheme{
+		Version: "1",
+		Groups: []fus.GroupSchema{
+			{
+				ID: "cli.command",
+				Rules: &fus.SchemeRules{
+					EventID: []string{fus.EnumExpr("executed")},
+					EventData: map[string][]string{
+						"command":     {fus.EnumExpr("run")},
+						"subcommand":  {fus.EnumExpr("start")},
+						"duration_ms": {fus.RegexpExpr(`\d+`)},
+					},
+				},
+			},
+			{
+				ID: "cli.auth",
+				Rules: &fus.SchemeRules{
+					EventID: []string{fus.EnumExpr("logged.in")},
+					EventData: map[string][]string{
+						"method": {fus.EnumExpr("pkce", "token")},
+					},
+				},
+			},
+			{
+				ID: "qd.cl.system.os",
+				Rules: &fus.SchemeRules{
+					EventID: []string{fus.EnumExpr("os.name")},
+					EventData: map[string][]string{
+						"name": {fus.EnumExpr("darwin", "linux", "windows")},
+						"arch": {fus.EnumExpr("amd64", "arm64")},
+					},
+				},
+			},
+		},
+	}
+	validator, err := fus.NewValidator(scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	logger, err := fus.NewLogger(
 		fus.RecorderConfig{
 			RecorderID:      "FUS",
@@ -32,6 +75,7 @@ func TestExamplePayload(t *testing.T) {
 			DeviceID:        "test-device-id-12345",
 		},
 		fus.WithFUSConfig(&fus.FUSConfig{SendEndpoint: server.URL, Salt: "test-salt"}),
+		fus.WithValidator(validator),
 	)
 	if err != nil {
 		t.Fatal(err)
