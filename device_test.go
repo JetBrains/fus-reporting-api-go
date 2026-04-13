@@ -3,6 +3,7 @@ package fus
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -100,13 +101,14 @@ func TestGetOrCreateDeviceID(t *testing.T) {
 		t.Errorf("device ID changed: %q != %q", id1, id2)
 	}
 
-	// File exists with correct permissions.
+	// File exists with correct permissions (Unix only — Windows synthesizes
+	// a mode from the readonly attribute and returns 0o666).
 	path := filepath.Join(dir, deviceIDFile)
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Errorf("file permissions = %o, want 600", info.Mode().Perm())
 	}
 }
