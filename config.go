@@ -34,29 +34,46 @@ type FUSConfig struct {
 	FetchedAt    int64  `json:"fetched_at"`
 }
 
-// LoadOrFetchConfig returns cached config if fresh, otherwise fetches from the server.
-// Falls back to a default config on any failure.
-func LoadOrFetchConfig(recorderID, productCode, productVersion, dataDir string, region RegionCode) *FUSConfig {
+// LoadOrFetchConfig returns a usable FUS config with a non-empty salt.
+//
+// Resolution order:
+//  1. fresh cache (age < configCacheTTL) with non-empty salt,
+//  2. fresh fetch from the config endpoint,
+//  3. stale cache with non-empty salt, used as a fallback when the refresh fails.
+//
+// Returns an error if none of the above yield a non-empty salt. Fail-closed:
+// callers must not ship events with a predictable / empty salt because that
+// defeats the device-ID hashing contract.
+func LoadOrFetchConfig(recorderID, productCode, productVersion, dataDir string, region RegionCode) (*FUSConfig, error) {
 	cachePath := filepath.Join(dataDir, configCacheFile)
+	cached, cacheErr := loadCachedConfig(cachePath)
+	cacheUsable := cacheErr == nil && cached.Salt != ""
 
-	if cfg, err := loadCachedConfig(cachePath); err == nil {
-		if time.Since(time.Unix(cfg.FetchedAt, 0)) < configCacheTTL {
-			return cfg
-		}
+	if cacheUsable && time.Since(time.Unix(cached.FetchedAt, 0)) < configCacheTTL {
+		return cached, nil
 	}
 
 	cfg, err := fetchConfig(recorderID, productCode, productVersion, region)
+	if err == nil {
+		cfg.FetchedAt = time.Now().Unix()
+		writeCache(cachePath, cfg)
+		return cfg, nil
+	}
+
+	if cacheUsable {
+		return cached, nil
+	}
+
+	return nil, fmt.Errorf("fus: no usable config (no cached salt and fetch failed: %w)", err)
+}
+
+func writeCache(path string, cfg *FUSConfig) {
+	data, err := json.Marshal(cfg)
 	if err != nil {
-		return defaultConfig()
+		return
 	}
-
-	cfg.FetchedAt = time.Now().Unix()
-	if data, err := json.Marshal(cfg); err == nil {
-		_ = os.MkdirAll(dataDir, 0o700)
-		_ = os.WriteFile(cachePath, data, 0o600)
-	}
-
-	return cfg
+	_ = os.MkdirAll(filepath.Dir(path), 0o700)
+	_ = os.WriteFile(path, data, 0o600)
 }
 
 func loadCachedConfig(path string) (*FUSConfig, error) {
@@ -127,20 +144,21 @@ func fetchConfig(recorderID, productCode, productVersion string, region RegionCo
 	}
 
 	v := findMatchingVersion(remote.Versions, productVersion)
-
-	cfg := defaultConfig()
-	if v != nil {
-		if v.Endpoints.Send != "" {
-			cfg.SendEndpoint = v.Endpoints.Send
-		}
-		if v.Options.IDSalt != "" {
-			cfg.Salt = v.Options.IDSalt
-		}
-		if v.Options.IDSaltRevision != "" {
-			cfg.SaltRevision, _ = strconv.Atoi(v.Options.IDSaltRevision)
-		}
+	if v == nil {
+		return nil, fmt.Errorf("fus config: response contained no versions")
 	}
 
+	cfg := &FUSConfig{SendEndpoint: defaultSendEndpoint}
+	if v.Endpoints.Send != "" {
+		cfg.SendEndpoint = v.Endpoints.Send
+	}
+	cfg.Salt = v.Options.IDSalt
+	if v.Options.IDSaltRevision != "" {
+		cfg.SaltRevision, _ = strconv.Atoi(v.Options.IDSaltRevision)
+	}
+	if cfg.Salt == "" {
+		return nil, fmt.Errorf("fus config: matched version has empty id_salt")
+	}
 	return cfg, nil
 }
 
@@ -237,9 +255,3 @@ func compareMajorVersions(a, b []int) int {
 	return 0
 }
 
-func defaultConfig() *FUSConfig {
-	return &FUSConfig{
-		SendEndpoint: defaultSendEndpoint,
-		Salt:         "default-fus-salt",
-	}
-}
