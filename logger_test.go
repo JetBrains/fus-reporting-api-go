@@ -2,6 +2,7 @@ package fus
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -182,6 +183,94 @@ func TestLoggerReBuffersOnlyUnsentEvents(t *testing.T) {
 	}
 	if len(events) != 100 {
 		t.Errorf("re-buffered events = %d, want 100 (only unsent batch)", len(events))
+	}
+}
+
+func TestLoggerFailClosedOnEmptySalt(t *testing.T) {
+	_, err := NewLogger(
+		RecorderConfig{
+			RecorderID:      "TCX",
+			RecorderVersion: 1,
+			ProductCode:     "TCX",
+			BuildVersion:    "0.1.0",
+			DataDir:         t.TempDir(),
+		},
+		WithFUSConfig(&FUSConfig{SendEndpoint: "http://localhost", Salt: ""}),
+	)
+	if err == nil {
+		t.Fatal("NewLogger should fail when salt is empty")
+	}
+}
+
+func TestLoggerDropsOversizedEvents(t *testing.T) {
+	var received Report
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	logger := newTestLogger(t, server)
+
+	oversized := map[string]any{}
+	for i := 0; i < MaxDataFields+1; i++ {
+		oversized[fmt.Sprintf("f%d", i)] = i
+	}
+	logger.Track(EventGroup{ID: "grp", Version: 1}, "evt", oversized)
+
+	ok := map[string]any{"a": 1}
+	logger.Track(EventGroup{ID: "grp", Version: 1}, "evt", ok)
+
+	if err := logger.Flush(t.Context()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if len(received.Events) != 1 {
+		t.Fatalf("received events = %d, want 1 (oversized dropped)", len(received.Events))
+	}
+}
+
+func TestLoggerEscapesEventStrings(t *testing.T) {
+	var received Report
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	logger := newTestLogger(t, server)
+
+	logger.Track(
+		EventGroup{ID: "grp with space", Version: 1},
+		"action invoked",
+		map[string]any{
+			"user.email": "foo\tbar",
+			"ok":         "hello world",
+		},
+	)
+
+	if err := logger.Flush(t.Context()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if len(received.Events) != 1 {
+		t.Fatalf("events = %d, want 1", len(received.Events))
+	}
+	e := received.Events[0]
+	if e.Group.ID != "grp_with_space" {
+		t.Errorf("group.id = %q, want grp_with_space", e.Group.ID)
+	}
+	if e.Event.ID != "action invoked" {
+		t.Errorf("event.id = %q, want 'action invoked' (spaces kept in values)", e.Event.ID)
+	}
+	if _, ok := e.Event.Data["user_email"]; !ok {
+		t.Errorf("data key should be escaped to user_email, got keys %v", e.Event.Data)
+	}
+	if v, _ := e.Event.Data["user_email"].(string); v != "foo bar" {
+		t.Errorf("data[user_email] = %q, want %q", v, "foo bar")
+	}
+	if v, _ := e.Event.Data["ok"].(string); v != "hello world" {
+		t.Errorf("data[ok] = %q, want %q", v, "hello world")
 	}
 }
 
