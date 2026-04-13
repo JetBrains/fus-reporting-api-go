@@ -31,6 +31,7 @@ func newTestLogger(t *testing.T, server *httptest.Server) *Logger {
 		},
 		WithFUSConfig(cfg),
 		WithClient(NewClient(cfg.SendEndpoint, 0)),
+		WithValidator(NewPermissiveValidator()),
 	)
 	if err != nil {
 		t.Fatalf("new logger: %v", err)
@@ -196,9 +197,29 @@ func TestLoggerFailClosedOnEmptySalt(t *testing.T) {
 			DataDir:         t.TempDir(),
 		},
 		WithFUSConfig(&FUSConfig{SendEndpoint: "http://localhost", Salt: ""}),
+		WithValidator(NewPermissiveValidator()),
 	)
 	if err == nil {
 		t.Fatal("NewLogger should fail when salt is empty")
+	}
+}
+
+func TestLoggerRequiresValidator(t *testing.T) {
+	_, err := NewLogger(
+		RecorderConfig{
+			RecorderID:      "TCX",
+			RecorderVersion: 1,
+			ProductCode:     "TCX",
+			BuildVersion:    "0.1.0",
+			DataDir:         t.TempDir(),
+		},
+		WithFUSConfig(testFUSConfig),
+	)
+	if err == nil {
+		t.Fatal("NewLogger should fail when no validator is configured")
+	}
+	if !strings.Contains(err.Error(), "validator is required") {
+		t.Errorf("error should mention missing validator, got %v", err)
 	}
 }
 
@@ -285,6 +306,7 @@ func TestLoggerWithCustomDeviceID(t *testing.T) {
 			DeviceID:        "custom-device-id",
 		},
 		WithFUSConfig(testFUSConfig),
+		WithValidator(NewPermissiveValidator()),
 	)
 	if err != nil {
 		t.Fatalf("new logger: %v", err)

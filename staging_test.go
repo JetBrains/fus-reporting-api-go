@@ -90,6 +90,25 @@ func TestIntegrationFullFlow(t *testing.T) {
 		Salt:         testSalt,
 	}
 
+	scheme := &fus.Scheme{
+		Groups: []fus.GroupSchema{
+			{
+				ID: "actions",
+				Rules: &fus.SchemeRules{
+					EventID: []string{fus.EnumExpr("action.invoked")},
+					EventData: map[string][]string{
+						"action_id": {fus.RegexpExpr(`[A-Za-z_]+`)},
+						"lang":      {fus.EnumExpr("Kotlin", "Java", "Go")},
+					},
+				},
+			},
+		},
+	}
+	validator, err := fus.NewValidator(scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	logger, err := fus.NewLogger(
 		fus.RecorderConfig{
 			RecorderID:      recorderID,
@@ -100,6 +119,7 @@ func TestIntegrationFullFlow(t *testing.T) {
 			DeviceID:        deviceID,
 		},
 		fus.WithFUSConfig(fusConfig),
+		fus.WithValidator(validator),
 	)
 	if err != nil {
 		t.Fatalf("new logger: %v", err)
@@ -252,6 +272,26 @@ func TestStagingSend(t *testing.T) {
 	t.Logf("Staging endpoint: %s", cfg.SendEndpoint)
 	t.Logf("Salt: %s (revision %d)", cfg.Salt, cfg.SaltRevision)
 
+	scheme := &fus.Scheme{
+		Groups: []fus.GroupSchema{
+			{
+				ID: "cli.command",
+				Rules: &fus.SchemeRules{
+					EventID: []string{fus.EnumExpr("executed")},
+					EventData: map[string][]string{
+						"command":     {fus.EnumExpr("run")},
+						"subcommand":  {fus.EnumExpr("start")},
+						"duration_ms": {fus.RegexpExpr(`\d+`)},
+					},
+				},
+			},
+		},
+	}
+	validator, err := fus.NewValidator(scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	logger, err := fus.NewLogger(
 		fus.RecorderConfig{
 			RecorderID:      recorderID,
@@ -261,6 +301,7 @@ func TestStagingSend(t *testing.T) {
 			DataDir:         t.TempDir(),
 		},
 		fus.WithFUSConfig(cfg),
+		fus.WithValidator(validator),
 	)
 	if err != nil {
 		t.Fatalf("new logger: %v", err)
