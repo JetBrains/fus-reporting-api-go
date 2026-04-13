@@ -4,9 +4,9 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 )
 
 const (
@@ -35,7 +35,11 @@ func (b *Buffer) Append(event LogEvent) error {
 		return fmt.Errorf("create buffer dir: %w", err)
 	}
 
-	f, err := os.OpenFile(b.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	// O_RDWR rather than O_WRONLY|O_APPEND: on Windows, O_APPEND maps to
+	// FILE_APPEND_DATA without GENERIC_WRITE, which LockFileEx rejects.
+	// The exclusive lock below guarantees no concurrent writer, so seeking
+	// to end before each write is equivalent to O_APPEND on Unix.
+	f, err := os.OpenFile(b.path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return fmt.Errorf("open buffer: %w", err)
 	}
@@ -45,6 +49,10 @@ func (b *Buffer) Append(event LogEvent) error {
 		return fmt.Errorf("lock buffer: %w", err)
 	}
 	defer unlockFile(f)
+
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		return fmt.Errorf("seek buffer: %w", err)
+	}
 
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -144,10 +152,3 @@ func scanEvents(f *os.File) []LogEvent {
 	return events
 }
 
-func lockFile(f *os.File) error {
-	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
-}
-
-func unlockFile(f *os.File) error {
-	return syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-}
