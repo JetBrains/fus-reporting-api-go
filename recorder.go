@@ -24,4 +24,7 @@ type RecorderConfig struct {
 
 	// CDN region for config endpoints. Defaults to RegionAll.
 	Region RegionCode
+
+	// AnonymizationSalt is the product-supplied salt used for SHA-256 device/session anonymization. Mirrors JVM FusClientConfig.anonymizationSalt. Takes priority over any salt in the public config.
+	AnonymizationSalt string
 }

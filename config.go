@@ -34,20 +34,11 @@ type FUSConfig struct {
 	FetchedAt    int64  `json:"fetched_at"`
 }
 
-// LoadOrFetchConfig returns a usable FUS config with a non-empty salt.
-//
-// Resolution order:
-//  1. fresh cache (age < configCacheTTL) with non-empty salt,
-//  2. fresh fetch from the config endpoint,
-//  3. stale cache with non-empty salt, used as a fallback when the refresh fails.
-//
-// Returns an error if none of the above yield a non-empty salt. Fail-closed:
-// callers must not ship events with a predictable / empty salt because that
-// defeats the device-ID hashing contract.
+// LoadOrFetchConfig returns the public FUS config (send endpoint, options); salt may be empty — supply it via RecorderConfig.AnonymizationSalt.
 func LoadOrFetchConfig(recorderID, productCode, productVersion, dataDir string, region RegionCode) (*FUSConfig, error) {
 	cachePath := filepath.Join(dataDir, configCacheFile)
 	cached, cacheErr := loadCachedConfig(cachePath)
-	cacheUsable := cacheErr == nil && cached.Salt != ""
+	cacheUsable := cacheErr == nil && cached.SendEndpoint != ""
 
 	if cacheUsable && time.Since(time.Unix(cached.FetchedAt, 0)) < configCacheTTL {
 		return cached, nil
@@ -64,7 +55,7 @@ func LoadOrFetchConfig(recorderID, productCode, productVersion, dataDir string, 
 		return cached, nil
 	}
 
-	return nil, fmt.Errorf("fus: no usable config (no cached salt and fetch failed: %w)", err)
+	return nil, fmt.Errorf("fus: no usable config (no cached endpoint and fetch failed: %w)", err)
 }
 
 func writeCache(path string, cfg *FUSConfig) {
@@ -95,8 +86,8 @@ type remoteConfigResponse struct {
 
 type remoteConfigVersion struct {
 	MajorBuildVersionBorders *versionBorders       `json:"majorBuildVersionBorders"`
-	Endpoints                remoteConfigEndpoints  `json:"endpoints"`
-	Options                  remoteConfigOptions    `json:"options"`
+	Endpoints                remoteConfigEndpoints `json:"endpoints"`
+	Options                  remoteConfigOptions   `json:"options"`
 }
 
 type versionBorders struct {
@@ -155,9 +146,6 @@ func fetchConfig(recorderID, productCode, productVersion string, region RegionCo
 	cfg.Salt = v.Options.IDSalt
 	if v.Options.IDSaltRevision != "" {
 		cfg.SaltRevision, _ = strconv.Atoi(v.Options.IDSaltRevision)
-	}
-	if cfg.Salt == "" {
-		return nil, fmt.Errorf("fus config: matched version has empty id_salt")
 	}
 	return cfg, nil
 }
@@ -254,4 +242,3 @@ func compareMajorVersions(a, b []int) int {
 	}
 	return 0
 }
-

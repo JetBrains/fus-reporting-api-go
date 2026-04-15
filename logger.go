@@ -1,6 +1,7 @@
 package fus
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -84,8 +85,9 @@ func NewLogger(cfg RecorderConfig, opts ...LoggerOption) (*Logger, error) {
 		}
 		l.fusConfig = fc
 	}
+	l.fusConfig.Salt = cmp.Or(cfg.AnonymizationSalt, l.fusConfig.Salt)
 	if l.fusConfig.Salt == "" {
-		return nil, errors.New("fus: config salt is empty; refusing to emit events with predictable hashes")
+		return nil, errors.New("fus: anonymization salt is empty; set RecorderConfig.AnonymizationSalt")
 	}
 	if l.validator == nil {
 		return nil, errors.New("fus: validator is required; pass WithValidator(fus.NewValidator(scheme))")
