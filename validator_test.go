@@ -368,7 +368,7 @@ func TestWriteSchemeJSON(t *testing.T) {
 }
 
 func TestPermissiveValidatorPassesEverything(t *testing.T) {
-	v := NewPermissiveValidator()
+	v := newPermissiveValidator()
 	ev := LogEvent{
 		Build: "0.0.1",
 		Group: EventGroup{ID: "anything", Version: 1},
@@ -477,6 +477,7 @@ func TestLoggerRunsValidator(t *testing.T) {
 	}
 
 	logger, err := NewLogger(
+		t.Context(),
 		RecorderConfig{
 			RecorderID:      "TCX",
 			RecorderVersion: 1,
@@ -502,7 +503,7 @@ func TestLoggerRunsValidator(t *testing.T) {
 		},
 	)
 
-	events, err := logger.buffer.ReadAndClear()
+	events, err := logger.buf.ReadAndClear()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,6 +528,7 @@ func TestLoggerRunsValidator(t *testing.T) {
 func TestLoggerValidatorDropsOutOfRangeBuild(t *testing.T) {
 	validator, _ := NewValidator(tcxScheme())
 	logger, err := NewLogger(
+		t.Context(),
 		RecorderConfig{
 			RecorderID:      "TCX",
 			RecorderVersion: 1,
@@ -543,7 +545,7 @@ func TestLoggerValidatorDropsOutOfRangeBuild(t *testing.T) {
 
 	logger.Track(EventGroup{ID: "teamcity.cli.session", Version: 1}, "started", map[string]any{"os": "darwin"})
 
-	events, _ := logger.buffer.ReadAndClear()
+	events, _ := logger.buf.ReadAndClear()
 	if len(events) != 0 {
 		t.Errorf("expected event to be dropped (build out of range), got %d buffered", len(events))
 	}

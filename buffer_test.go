@@ -16,7 +16,7 @@ func testEvent(id string) LogEvent {
 }
 
 func TestBufferAppendAndRead(t *testing.T) {
-	buf := NewBuffer(t.TempDir(), 100)
+	buf := newBuffer(t.TempDir(), 100)
 
 	if err := buf.Append(testEvent("e1")); err != nil {
 		t.Fatalf("append: %v", err)
@@ -41,7 +41,7 @@ func TestBufferAppendAndRead(t *testing.T) {
 }
 
 func TestBufferReadAndClearTruncates(t *testing.T) {
-	buf := NewBuffer(t.TempDir(), 100)
+	buf := newBuffer(t.TempDir(), 100)
 
 	if err := buf.Append(testEvent("e1")); err != nil {
 		t.Fatalf("append: %v", err)
@@ -65,7 +65,7 @@ func TestBufferReadAndClearTruncates(t *testing.T) {
 }
 
 func TestBufferReadEmptyFile(t *testing.T) {
-	buf := NewBuffer(t.TempDir(), 100)
+	buf := newBuffer(t.TempDir(), 100)
 
 	events, err := buf.ReadAndClear()
 	if err != nil {
@@ -77,7 +77,7 @@ func TestBufferReadEmptyFile(t *testing.T) {
 }
 
 func TestBufferTrim(t *testing.T) {
-	buf := NewBuffer(t.TempDir(), 3)
+	buf := newBuffer(t.TempDir(), 3)
 
 	for i := range 5 {
 		if err := buf.Append(testEvent("e" + string(rune('0'+i)))); err != nil {
@@ -99,7 +99,7 @@ func TestBufferTrim(t *testing.T) {
 }
 
 func TestBufferConcurrentAppend(t *testing.T) {
-	buf := NewBuffer(t.TempDir(), 1000)
+	buf := newBuffer(t.TempDir(), 1000)
 
 	var wg sync.WaitGroup
 	for i := range 20 {

@@ -25,51 +25,51 @@ const (
 	symbolsToReplaceFieldName  = ".:;, "
 )
 
-// Escape sanitizes a FUS identifier (group id, build, product, recorder id).
+// escape sanitizes a FUS identifier (group id, build, product, recorder id).
 // Drops ' and ", replaces control chars / CR / LF / TAB / ":;, " with _, and
 // non-ASCII runes with ?.
-func Escape(s string) string {
+func escape(s string) string {
 	return escapeInternal(s, symbolsToReplaceIdentifier, false)
 }
 
-// EscapeEventIDOrFieldValue sanitizes an event ID or a string data value.
-// Same as Escape but keeps ordinary spaces and CR / LF / TAB become spaces.
-func EscapeEventIDOrFieldValue(s string) string {
+// escapeEventIDOrFieldValue sanitizes an event ID or a string data value.
+// Same as escape but keeps ordinary spaces and CR / LF / TAB become spaces.
+func escapeEventIDOrFieldValue(s string) string {
 	return escapeInternal(s, "", true)
 }
 
-// EscapeFieldName sanitizes a data-field or ids key. Same as Escape plus '.' -> '_'.
+// escapeFieldName sanitizes a data-field or ids key. Same as escape plus '.' -> '_'.
 // Reserved validator sentinel strings pass through unchanged.
-func EscapeFieldName(s string) string {
+func escapeFieldName(s string) string {
 	if _, ok := validationResultTypes[s]; ok {
 		return s
 	}
 	return escapeInternal(s, symbolsToReplaceFieldName, false)
 }
 
-// EscapeEventData returns a new map with every key escaped via EscapeFieldName
-// and every string value escaped via EscapeEventIDOrFieldValue. Nested maps and
+// escapeEventData returns a new map with every key escaped via escapeFieldName
+// and every string value escaped via escapeEventIDOrFieldValue. Nested maps and
 // slices are walked recursively; non-string scalars are passed through.
-func EscapeEventData(data map[string]any) map[string]any {
+func escapeEventData(data map[string]any) map[string]any {
 	if data == nil {
 		return nil
 	}
 	out := make(map[string]any, len(data))
 	for k, v := range data {
-		out[EscapeFieldName(k)] = escapeEventDataValue(v)
+		out[escapeFieldName(k)] = escapeEventDataValue(v)
 	}
 	return out
 }
 
-// EscapeIDs returns a new map with keys escaped via EscapeFieldName and values
-// escaped via EscapeEventIDOrFieldValue.
-func EscapeIDs(ids map[string]string) map[string]string {
+// escapeIDs returns a new map with keys escaped via escapeFieldName and values
+// escaped via escapeEventIDOrFieldValue.
+func escapeIDs(ids map[string]string) map[string]string {
 	if ids == nil {
 		return nil
 	}
 	out := make(map[string]string, len(ids))
 	for k, v := range ids {
-		out[EscapeFieldName(k)] = EscapeEventIDOrFieldValue(v)
+		out[escapeFieldName(k)] = escapeEventIDOrFieldValue(v)
 	}
 	return out
 }
@@ -77,7 +77,7 @@ func EscapeIDs(ids map[string]string) map[string]string {
 func escapeEventDataValue(v any) any {
 	switch vv := v.(type) {
 	case string:
-		return EscapeEventIDOrFieldValue(vv)
+		return escapeEventIDOrFieldValue(vv)
 	case []any:
 		out := make([]any, len(vv))
 		for i, item := range vv {
@@ -89,7 +89,7 @@ func escapeEventDataValue(v any) any {
 		}
 		return out
 	case map[string]any:
-		return EscapeEventData(vv)
+		return escapeEventData(vv)
 	default:
 		return v
 	}

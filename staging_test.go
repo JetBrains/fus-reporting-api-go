@@ -110,6 +110,7 @@ func TestIntegrationFullFlow(t *testing.T) {
 	}
 
 	logger, err := fus.NewLogger(
+		t.Context(),
 		fus.RecorderConfig{
 			RecorderID:      recorderID,
 			RecorderVersion: 1,
@@ -293,6 +294,7 @@ func TestStagingSend(t *testing.T) {
 	}
 
 	logger, err := fus.NewLogger(
+		t.Context(),
 		fus.RecorderConfig{
 			RecorderID:      recorderID,
 			RecorderVersion: 1,

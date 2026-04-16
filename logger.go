@@ -3,8 +3,9 @@ package fus
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
+	"maps"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -15,14 +16,27 @@ const defaultFlushTimeout = 2 * time.Second
 // Track drops events that exceed this limit.
 const MaxDataFields = 10
 
+// DropReason describes why an event was silently dropped by Track.
+type DropReason string
+
+const (
+	DropTooManyFields DropReason = "too_many_data_fields"
+	DropValidation    DropReason = "validation_rejected"
+	DropBufferError   DropReason = "buffer_write_failed"
+)
+
+// OnDropFunc is called when Track silently drops an event.
+type OnDropFunc func(group, event string, reason DropReason)
+
 // Logger buffers FUS events to disk and sends them on Flush.
 type Logger struct {
 	config     RecorderConfig
 	fusConfig  *FUSConfig
-	buffer     *Buffer
+	buf        *buffer
 	client     *Client
 	validator  *Validator
 	anonymizer *Anonymizer
+	onDrop     OnDropFunc
 	deviceID   string
 	session    string
 	bucket     int
@@ -55,7 +69,12 @@ func WithAnonymizer(a *Anonymizer) LoggerOption {
 	return func(l *Logger) { l.anonymizer = a }
 }
 
-func NewLogger(cfg RecorderConfig, opts ...LoggerOption) (*Logger, error) {
+// WithOnDrop registers a callback invoked when Track silently drops an event.
+func WithOnDrop(fn OnDropFunc) LoggerOption {
+	return func(l *Logger) { l.onDrop = fn }
+}
+
+func NewLogger(ctx context.Context, cfg RecorderConfig, opts ...LoggerOption) (*Logger, error) {
 	deviceID := cfg.DeviceID
 	if deviceID == "" {
 		var err error
@@ -72,7 +91,7 @@ func NewLogger(cfg RecorderConfig, opts ...LoggerOption) (*Logger, error) {
 
 	l := &Logger{
 		config:   cfg,
-		buffer:   NewBuffer(cfg.DataDir, defaultMaxEvents),
+		buf:      newBuffer(cfg.DataDir, defaultMaxEvents),
 		deviceID: deviceID,
 		bucket:   ComputeBucket(deviceID),
 	}
@@ -86,7 +105,7 @@ func NewLogger(cfg RecorderConfig, opts ...LoggerOption) (*Logger, error) {
 		if region == "" {
 			region = RegionAll
 		}
-		fc, err := LoadOrFetchConfig(cfg.RecorderID, cfg.ProductCode, cfg.BuildVersion, cfg.DataDir, region)
+		fc, err := loadOrFetchConfigCtx(ctx, cfg.RecorderID, cfg.ProductCode, cfg.BuildVersion, cfg.DataDir, region)
 		if err != nil {
 			return nil, err
 		}
@@ -100,28 +119,38 @@ func NewLogger(cfg RecorderConfig, opts ...LoggerOption) (*Logger, error) {
 		return nil, errors.New("fus: validator is required; pass WithValidator(fus.NewValidator(scheme))")
 	}
 	if l.client == nil {
-		l.client = NewClient(l.fusConfig.SendEndpoint, defaultTimeout)
-		l.client.userAgent = cfg.ProductCode + "/" + cfg.BuildVersion
+		ua := cfg.ProductCode + "/" + cfg.BuildVersion
+		l.client = NewClient(l.fusConfig.SendEndpoint, defaultTimeout, ua)
 	}
 
 	l.session = Anonymize([]byte(l.fusConfig.Salt), sessionID)
 
-	_ = l.buffer.Trim()
+	_ = l.buf.Trim()
 
 	return l, nil
 }
 
-// Track buffers an event to disk. Failures are silent. Events with more than
-// MaxDataFields entries are dropped.
+// loadOrFetchConfigCtx wraps LoadOrFetchConfig, checking ctx before the
+// potentially slow network fetch.
+func loadOrFetchConfigCtx(ctx context.Context, recorderID, productCode, productVersion, dataDir string, region RegionCode) (*FUSConfig, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	return LoadOrFetchConfig(recorderID, productCode, productVersion, dataDir, region)
+}
+
+// Track buffers an event to disk. Failures are silent unless an OnDrop
+// callback is registered. Events with more than MaxDataFields entries are
+// dropped.
 //
-// Pipeline: raw event ─▶ validator ─▶ anonymizer ─▶ escaper ─▶ disk buffer.
-// The validator rewrites the event to match the registered scheme, sentinel-
-// replacing unknown keys / unmatched values and dropping events out of a
-// group's build or version range. The escaper then normalizes string fields
-// for the LION v4 wire format (drops ' ", replaces CR/LF/TAB and separator
-// chars, non-ASCII runes → ?).
+// Pipeline: raw event -> validator -> anonymizer -> escaper -> disk buffer.
 func (l *Logger) Track(group EventGroup, eventID string, data map[string]any) {
 	if len(data) > MaxDataFields {
+		if l.onDrop != nil {
+			l.onDrop(group.ID, eventID, DropTooManyFields)
+		}
 		return
 	}
 
@@ -149,6 +178,9 @@ func (l *Logger) Track(group EventGroup, eventID string, data map[string]any) {
 	if l.validator != nil {
 		validated, drop := l.validator.Validate(event)
 		if drop {
+			if l.onDrop != nil {
+				l.onDrop(group.ID, eventID, DropValidation)
+			}
 			return
 		}
 		event = validated
@@ -158,30 +190,33 @@ func (l *Logger) Track(group EventGroup, eventID string, data map[string]any) {
 		l.anonymizer.AnonymizeEvent(&event)
 	}
 
-	event = escapeEvent(event)
-	_ = l.buffer.Append(event)
+	event = escapeLogEvent(event)
+	if err := l.buf.Append(event); err != nil && l.onDrop != nil {
+		l.onDrop(group.ID, eventID, DropBufferError)
+	}
 }
 
-// escapeEvent applies StatisticsEventEscaper rules to every caller-sourced
-// string field in a LION v4 event. Safe to call on already-validated events:
-// all validator sentinels are escape-clean, so escaping them is a no-op.
-func escapeEvent(e LogEvent) LogEvent {
-	e.Recorder.ID = Escape(e.Recorder.ID)
-	e.Product = Escape(e.Product)
-	e.IDs = EscapeIDs(e.IDs)
-	e.Build = Escape(e.Build)
-	e.Group.ID = Escape(e.Group.ID)
-	e.Event.ID = EscapeEventIDOrFieldValue(e.Event.ID)
-	e.Event.Data = EscapeEventData(e.Event.Data)
+// escapeLogEvent applies StatisticsEventEscaper rules to every caller-sourced
+// string field in a LION v4 event.
+func escapeLogEvent(e LogEvent) LogEvent {
+	e.Recorder.ID = escape(e.Recorder.ID)
+	e.Product = escape(e.Product)
+	e.IDs = escapeIDs(e.IDs)
+	e.Build = escape(e.Build)
+	e.Group.ID = escape(e.Group.ID)
+	e.Event.ID = escapeEventIDOrFieldValue(e.Event.ID)
+	e.Event.Data = escapeEventData(e.Event.Data)
 	return e
 }
 
 // Flush sends all buffered events, merging consecutive duplicates.
+// The mutex is held only during buffer I/O, not during the HTTP send,
+// so Track calls are not blocked by network latency.
 func (l *Logger) Flush(ctx context.Context) error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	events, err := l.buf.ReadAndClear()
+	l.mu.Unlock()
 
-	events, err := l.buffer.ReadAndClear()
 	if err != nil {
 		return err
 	}
@@ -193,18 +228,20 @@ func (l *Logger) Flush(ctx context.Context) error {
 
 	sent, err := l.client.SendBatched(ctx, events)
 	if err != nil {
+		l.mu.Lock()
 		for _, e := range events[sent:] {
-			_ = l.buffer.Append(e)
+			_ = l.buf.Append(e)
 		}
+		l.mu.Unlock()
 		return err
 	}
 
 	return nil
 }
 
-func (l *Logger) Close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultFlushTimeout)
-	defer cancel()
+// Close flushes all buffered events. Pass a context with a deadline to bound
+// the flush duration; use context.Background() for an unbounded flush.
+func (l *Logger) Close(ctx context.Context) error {
 	return l.Flush(ctx)
 }
 
@@ -240,32 +277,8 @@ func canMerge(a, b *LogEvent) bool {
 		a.Group == b.Group &&
 		a.Bucket == b.Bucket &&
 		a.Event.ID == b.Event.ID &&
-		stringMapsEqual(a.IDs, b.IDs) &&
-		anyMapsEqual(a.Event.Data, b.Event.Data) &&
-		anyMapsEqual(a.SystemData, b.SystemData) &&
-		anyMapsEqual(a.ClientData, b.ClientData)
-}
-
-func stringMapsEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
-		}
-	}
-	return true
-}
-
-func anyMapsEqual(a, b map[string]any) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	if len(a) == 0 {
-		return true
-	}
-	aj, _ := json.Marshal(a)
-	bj, _ := json.Marshal(b)
-	return string(aj) == string(bj)
+		maps.Equal(a.IDs, b.IDs) &&
+		reflect.DeepEqual(a.Event.Data, b.Event.Data) &&
+		reflect.DeepEqual(a.SystemData, b.SystemData) &&
+		reflect.DeepEqual(a.ClientData, b.ClientData)
 }

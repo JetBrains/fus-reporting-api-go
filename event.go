@@ -36,3 +36,13 @@ type LogEvent struct {
 type Report struct {
 	Events []LogEvent `json:"events"`
 }
+
+// Group returns a counter EventGroup (State=false).
+func Group(id string, version int) EventGroup {
+	return EventGroup{ID: id, Version: version}
+}
+
+// StateGroup returns a state EventGroup (State=true).
+func StateGroup(id string, version int) EventGroup {
+	return EventGroup{ID: id, Version: version, State: true}
+}

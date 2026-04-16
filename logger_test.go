@@ -22,6 +22,7 @@ func newTestLogger(t *testing.T, server *httptest.Server) *Logger {
 		cfg = &FUSConfig{SendEndpoint: server.URL, Salt: "test-salt"}
 	}
 	logger, err := NewLogger(
+		t.Context(),
 		RecorderConfig{
 			RecorderID:      "TC",
 			RecorderVersion: 1,
@@ -30,8 +31,8 @@ func newTestLogger(t *testing.T, server *httptest.Server) *Logger {
 			DataDir:         t.TempDir(),
 		},
 		WithFUSConfig(cfg),
-		WithClient(NewClient(cfg.SendEndpoint, 0)),
-		WithValidator(NewPermissiveValidator()),
+		WithClient(NewClient(cfg.SendEndpoint, 0, "")),
+		WithValidator(newPermissiveValidator()),
 	)
 	if err != nil {
 		t.Fatalf("new logger: %v", err)
@@ -109,7 +110,7 @@ func TestLoggerReBuffersOnFailure(t *testing.T) {
 	}
 
 	// Events should be re-buffered.
-	events, readErr := logger.buffer.ReadAndClear()
+	events, readErr := logger.buf.ReadAndClear()
 	if readErr != nil {
 		t.Fatalf("read buffer: %v", readErr)
 	}
@@ -178,7 +179,7 @@ func TestLoggerReBuffersOnlyUnsentEvents(t *testing.T) {
 	}
 
 	// Only the 100 unsent events should be re-buffered, not all 600.
-	events, readErr := logger.buffer.ReadAndClear()
+	events, readErr := logger.buf.ReadAndClear()
 	if readErr != nil {
 		t.Fatalf("read buffer: %v", readErr)
 	}
@@ -189,6 +190,7 @@ func TestLoggerReBuffersOnlyUnsentEvents(t *testing.T) {
 
 func TestLoggerFailClosedOnEmptySalt(t *testing.T) {
 	_, err := NewLogger(
+		t.Context(),
 		RecorderConfig{
 			RecorderID:      "TCX",
 			RecorderVersion: 1,
@@ -197,7 +199,7 @@ func TestLoggerFailClosedOnEmptySalt(t *testing.T) {
 			DataDir:         t.TempDir(),
 		},
 		WithFUSConfig(&FUSConfig{SendEndpoint: "http://localhost", Salt: ""}),
-		WithValidator(NewPermissiveValidator()),
+		WithValidator(newPermissiveValidator()),
 	)
 	if err == nil {
 		t.Fatal("NewLogger should fail when salt is empty")
@@ -206,6 +208,7 @@ func TestLoggerFailClosedOnEmptySalt(t *testing.T) {
 
 func TestLoggerRequiresValidator(t *testing.T) {
 	_, err := NewLogger(
+		t.Context(),
 		RecorderConfig{
 			RecorderID:      "TCX",
 			RecorderVersion: 1,
@@ -235,7 +238,7 @@ func TestLoggerDropsOversizedEvents(t *testing.T) {
 	logger := newTestLogger(t, server)
 
 	oversized := map[string]any{}
-	for i := 0; i < MaxDataFields+1; i++ {
+	for i := range MaxDataFields + 1 {
 		oversized[fmt.Sprintf("f%d", i)] = i
 	}
 	logger.Track(EventGroup{ID: "grp", Version: 1}, "evt", oversized)
@@ -297,6 +300,7 @@ func TestLoggerEscapesEventStrings(t *testing.T) {
 
 func TestLoggerWithCustomDeviceID(t *testing.T) {
 	logger, err := NewLogger(
+		t.Context(),
 		RecorderConfig{
 			RecorderID:      "TC",
 			RecorderVersion: 1,
@@ -306,7 +310,7 @@ func TestLoggerWithCustomDeviceID(t *testing.T) {
 			DeviceID:        "custom-device-id",
 		},
 		WithFUSConfig(testFUSConfig),
-		WithValidator(NewPermissiveValidator()),
+		WithValidator(newPermissiveValidator()),
 	)
 	if err != nil {
 		t.Fatalf("new logger: %v", err)
@@ -314,5 +318,49 @@ func TestLoggerWithCustomDeviceID(t *testing.T) {
 
 	if logger.deviceID != "custom-device-id" {
 		t.Errorf("deviceID = %q, want custom-device-id", logger.deviceID)
+	}
+}
+
+func TestLoggerOnDropCallback(t *testing.T) {
+	var drops []DropReason
+	logger, err := NewLogger(
+		t.Context(),
+		RecorderConfig{
+			RecorderID:      "TC",
+			RecorderVersion: 1,
+			ProductCode:     "TCC",
+			BuildVersion:    "0.1.0",
+			DataDir:         t.TempDir(),
+		},
+		WithFUSConfig(testFUSConfig),
+		WithValidator(newPermissiveValidator()),
+		WithOnDrop(func(group, event string, reason DropReason) {
+			drops = append(drops, reason)
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+
+	oversized := map[string]any{}
+	for i := range MaxDataFields + 1 {
+		oversized[fmt.Sprintf("f%d", i)] = i
+	}
+	logger.Track(EventGroup{ID: "grp", Version: 1}, "evt", oversized)
+
+	if len(drops) != 1 || drops[0] != DropTooManyFields {
+		t.Errorf("drops = %v, want [%s]", drops, DropTooManyFields)
+	}
+}
+
+func TestGroupHelpers(t *testing.T) {
+	g := Group("cli.command", 2)
+	if g.ID != "cli.command" || g.Version != 2 || g.State != false {
+		t.Errorf("Group() = %+v", g)
+	}
+
+	sg := StateGroup("cli.os", 3)
+	if sg.ID != "cli.os" || sg.Version != 3 || sg.State != true {
+		t.Errorf("StateGroup() = %+v", sg)
 	}
 }

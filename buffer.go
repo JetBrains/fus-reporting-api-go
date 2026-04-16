@@ -14,23 +14,23 @@ const (
 	defaultMaxEvents = 1000
 )
 
-// Buffer is a file-based JSONL event buffer with flock concurrency safety.
-type Buffer struct {
+// buffer is a file-based JSONL event buffer with flock concurrency safety.
+type buffer struct {
 	path    string
 	maxSize int
 }
 
-func NewBuffer(dataDir string, maxSize int) *Buffer {
+func newBuffer(dataDir string, maxSize int) *buffer {
 	if maxSize <= 0 {
 		maxSize = defaultMaxEvents
 	}
-	return &Buffer{
+	return &buffer{
 		path:    filepath.Join(dataDir, bufferFile),
 		maxSize: maxSize,
 	}
 }
 
-func (b *Buffer) Append(event LogEvent) error {
+func (b *buffer) Append(event LogEvent) error {
 	if err := os.MkdirAll(filepath.Dir(b.path), 0o700); err != nil {
 		return fmt.Errorf("create buffer dir: %w", err)
 	}
@@ -67,7 +67,7 @@ func (b *Buffer) Append(event LogEvent) error {
 }
 
 // ReadAndClear atomically reads all events and truncates the buffer.
-func (b *Buffer) ReadAndClear() ([]LogEvent, error) {
+func (b *buffer) ReadAndClear() ([]LogEvent, error) {
 	f, err := os.OpenFile(b.path, os.O_RDWR, 0o600)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -92,7 +92,7 @@ func (b *Buffer) ReadAndClear() ([]LogEvent, error) {
 }
 
 // Trim keeps only the last maxSize events, discarding the oldest.
-func (b *Buffer) Trim() error {
+func (b *buffer) Trim() error {
 	f, err := os.OpenFile(b.path, os.O_RDWR, 0o600)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -151,4 +151,3 @@ func scanEvents(f *os.File) []LogEvent {
 	}
 	return events
 }
-

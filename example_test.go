@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	"github.com/JetBrains/fus-reporting-api-go"
@@ -66,12 +65,13 @@ func TestExamplePayload(t *testing.T) {
 	}
 
 	logger, err := fus.NewLogger(
+		t.Context(),
 		fus.RecorderConfig{
 			RecorderID:      "FUS",
 			RecorderVersion: 1,
 			ProductCode:     "TCC",
 			BuildVersion:    "0.1.0",
-			DataDir:         os.TempDir(),
+			DataDir:         t.TempDir(),
 			DeviceID:        "test-device-id-12345",
 		},
 		fus.WithFUSConfig(&fus.FUSConfig{SendEndpoint: server.URL, Salt: "test-salt"}),
