@@ -28,10 +28,24 @@ const (
 )
 
 type FUSConfig struct {
-	SendEndpoint string `json:"send_endpoint"`
-	Salt         string `json:"salt"`
-	SaltRevision int    `json:"salt_revision"`
-	FetchedAt    int64  `json:"fetched_at"`
+	SendEndpoint     string `json:"send_endpoint"`
+	MetadataEndpoint string `json:"metadata_endpoint,omitempty"`
+	Salt             string `json:"salt"`
+	SaltRevision     int    `json:"salt_revision"`
+	FetchedAt        int64  `json:"fetched_at"`
+}
+
+// SchemeURL returns the full metadata URL for the given product code,
+// mirroring JVM ConfigurationVersion.provideMetadataProductUrl.
+func (c *FUSConfig) SchemeURL(productCode string) string {
+	base := c.MetadataEndpoint
+	if base == "" {
+		return ""
+	}
+	if !strings.HasSuffix(base, "/") {
+		base += "/"
+	}
+	return base + productCode + ".json"
 }
 
 // LoadOrFetchConfig returns the public FUS config (send endpoint, options); salt may be empty — supply it via RecorderConfig.AnonymizationSalt.
@@ -96,7 +110,8 @@ type versionBorders struct {
 }
 
 type remoteConfigEndpoints struct {
-	Send string `json:"send"`
+	Send     string `json:"send"`
+	Metadata string `json:"metadata"`
 }
 
 type remoteConfigOptions struct {
@@ -143,6 +158,7 @@ func fetchConfig(recorderID, productCode, productVersion string, region RegionCo
 	if v.Endpoints.Send != "" {
 		cfg.SendEndpoint = v.Endpoints.Send
 	}
+	cfg.MetadataEndpoint = v.Endpoints.Metadata
 	cfg.Salt = v.Options.IDSalt
 	if v.Options.IDSaltRevision != "" {
 		cfg.SaltRevision, _ = strconv.Atoi(v.Options.IDSaltRevision)

@@ -28,14 +28,14 @@ func tcxScheme() *Scheme {
 		},
 		Groups: []GroupSchema{
 			{
-				ID:      "teamcity.cli.session",
-				Builds:  []SchemeRange{{From: "0.1.0"}},
+				ID:     "teamcity.cli.session",
+				Builds: []SchemeRange{{From: "0.1.0"}},
 				Rules: &SchemeRules{
 					EventID: []string{"enum:started"},
 					EventData: map[string][]string{
-						"os":         {"enum:darwin|linux|windows|other"},
+						"os":          {"enum:darwin|linux|windows|other"},
 						"cli_version": {"regexp#version"},
-						"has_linked": {"enum#boolean"},
+						"has_linked":  {"enum#boolean"},
 					},
 				},
 			},
@@ -243,6 +243,53 @@ func TestValidatorSentinelPassthrough(t *testing.T) {
 	}
 }
 
+func TestValidatorGroupLocalEnums(t *testing.T) {
+	// CDN metadata uses group-local enums for event IDs (the __event_id pattern).
+	// The validator must resolve enum#ref against group-local rules, not just globals.
+	s := &Scheme{
+		Version: "1",
+		Rules: &SchemeRules{
+			Enums: map[string][]string{"boolean": {"true", "false"}},
+		},
+		Groups: []GroupSchema{{
+			ID: "my.group",
+			Rules: &SchemeRules{
+				EventID:   []string{"{enum#__event_id}"},
+				EventData: map[string][]string{"enabled": {"{enum#boolean}"}},
+				Enums: map[string][]string{
+					"__event_id": {"click", "press"},
+				},
+			},
+		}},
+	}
+	v, err := NewValidator(s)
+	if err != nil {
+		t.Fatalf("NewValidator: %v", err)
+	}
+
+	ev := LogEvent{
+		Group: EventGroup{ID: "my.group", Version: 1},
+		Event: EventAction{ID: "click", Data: map[string]any{"enabled": "true"}, Count: 1},
+	}
+	got, drop := v.Validate(ev)
+	if drop {
+		t.Fatal("event dropped")
+	}
+	if got.Event.ID != "click" {
+		t.Errorf("event ID = %q, want click (group-local enum should resolve)", got.Event.ID)
+	}
+	if got.Event.Data["enabled"] != "true" {
+		t.Errorf("enabled = %v, want true (global enum should still resolve)", got.Event.Data["enabled"])
+	}
+
+	// Unknown event ID should be rejected.
+	ev.Event.ID = "swipe"
+	got, _ = v.Validate(ev)
+	if got.Event.ID != "validation.unmatched_rule" {
+		t.Errorf("unknown event ID = %q, want sentinel", got.Event.ID)
+	}
+}
+
 func TestRuleExprHelpers(t *testing.T) {
 	cases := []struct {
 		got, want string
@@ -362,9 +409,9 @@ func TestLoadSchemeFromFile(t *testing.T) {
 
 func TestParseIntRangeExpr(t *testing.T) {
 	tests := []struct {
-		in    string
-		want  IntRange
-		ok    bool
+		in   string
+		want IntRange
+		ok   bool
 	}{
 		{"0..2", IntRange{0, 2}, true},
 		{"10..100", IntRange{10, 100}, true},
@@ -501,4 +548,3 @@ func TestLoggerValidatorDropsOutOfRangeBuild(t *testing.T) {
 		t.Errorf("expected event to be dropped (build out of range), got %d buffered", len(events))
 	}
 }
-
