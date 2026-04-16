@@ -26,7 +26,6 @@ import (
 //   - dictionary rules beyond plain enum
 //   - recursive validation of nested Map/List values in event_data
 //   - system_data / client_data / ids validation pipelines
-//   - anonymized_fields
 type Validator struct {
 	groups   map[string]*compiledGroup
 	globals  *globalRules

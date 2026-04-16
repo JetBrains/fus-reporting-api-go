@@ -20,10 +20,18 @@ type Scheme struct {
 // GroupSchema is one EventGroupRemoteDescriptor: the per-group rules plus the
 // build/version ranges that gate whether an event for this group is accepted.
 type GroupSchema struct {
-	ID       string         `json:"id"`
-	Builds   []SchemeRange  `json:"builds,omitempty"`
-	Versions []SchemeRange  `json:"versions,omitempty"`
-	Rules    *SchemeRules   `json:"rules,omitempty"`
+	ID               string            `json:"id"`
+	Builds           []SchemeRange     `json:"builds,omitempty"`
+	Versions         []SchemeRange     `json:"versions,omitempty"`
+	Rules            *SchemeRules      `json:"rules,omitempty"`
+	AnonymizedFields []AnonymizedField `json:"anonymized_fields,omitempty"`
+}
+
+// AnonymizedField declares which event_data fields should be hashed for a
+// specific event ID within its group.
+type AnonymizedField struct {
+	Event  string   `json:"event"`
+	Fields []string `json:"fields"`
 }
 
 // SchemeRules carries either group-local or global (scheme-level) rule bundles.
