@@ -17,15 +17,16 @@ const MaxDataFields = 10
 
 // Logger buffers FUS events to disk and sends them on Flush.
 type Logger struct {
-	config    RecorderConfig
-	fusConfig *FUSConfig
-	buffer    *Buffer
-	client    *Client
-	validator *Validator
-	deviceID  string
-	session   string
-	bucket    int
-	mu        sync.Mutex
+	config     RecorderConfig
+	fusConfig  *FUSConfig
+	buffer     *Buffer
+	client     *Client
+	validator  *Validator
+	anonymizer *Anonymizer
+	deviceID   string
+	session    string
+	bucket     int
+	mu         sync.Mutex
 }
 
 type LoggerOption func(*Logger)
@@ -46,6 +47,12 @@ func WithClient(c *Client) LoggerOption {
 // of build/version range are dropped.
 func WithValidator(v *Validator) LoggerOption {
 	return func(l *Logger) { l.validator = v }
+}
+
+// WithAnonymizer installs the field anonymizer. When set, event_data fields
+// declared in the scheme's anonymized_fields are hashed before buffering.
+func WithAnonymizer(a *Anonymizer) LoggerOption {
+	return func(l *Logger) { l.anonymizer = a }
 }
 
 func NewLogger(cfg RecorderConfig, opts ...LoggerOption) (*Logger, error) {
@@ -107,7 +114,7 @@ func NewLogger(cfg RecorderConfig, opts ...LoggerOption) (*Logger, error) {
 // Track buffers an event to disk. Failures are silent. Events with more than
 // MaxDataFields entries are dropped.
 //
-// Pipeline: raw event ─▶ validator (if configured) ─▶ escaper ─▶ disk buffer.
+// Pipeline: raw event ─▶ validator ─▶ anonymizer ─▶ escaper ─▶ disk buffer.
 // The validator rewrites the event to match the registered scheme, sentinel-
 // replacing unknown keys / unmatched values and dropping events out of a
 // group's build or version range. The escaper then normalizes string fields
@@ -145,6 +152,10 @@ func (l *Logger) Track(group EventGroup, eventID string, data map[string]any) {
 			return
 		}
 		event = validated
+	}
+
+	if l.anonymizer != nil {
+		l.anonymizer.AnonymizeEvent(&event)
 	}
 
 	event = escapeEvent(event)
