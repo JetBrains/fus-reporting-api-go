@@ -146,7 +146,9 @@ func extractEventIDs(rules *SchemeRules) []string {
 			s = s[1 : len(s)-1]
 		}
 		if after, ok := strings.CutPrefix(s, "enum:"); ok {
-			ids = append(ids, strings.Split(after, "|")...)
+			for part := range strings.SplitSeq(after, "|") {
+				ids = append(ids, part)
+			}
 		}
 	}
 	return ids

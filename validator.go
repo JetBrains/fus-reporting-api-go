@@ -32,13 +32,9 @@ type Validator struct {
 	allowAll bool // set only by NewPermissiveValidator
 }
 
-// NewPermissiveValidator returns a validator that accepts every event without
-// any scheme check.
-//
-// WARNING: intended for SDK internal tests and early bring-up only. Using this
-// in production defeats the client-side validation contract and will leak
-// unvalidated payloads into the FUS pipeline. Prefer NewValidator(scheme).
-func NewPermissiveValidator() *Validator {
+// newPermissiveValidator returns a validator that accepts every event without
+// any scheme check. Intended for internal tests only.
+func newPermissiveValidator() *Validator {
 	return &Validator{allowAll: true}
 }
 
@@ -402,11 +398,7 @@ func acceptsInVersion(ranges []SchemeRange, version int) bool {
 func compareBuilds(a, b string) int {
 	aa := strings.Split(a, ".")
 	bb := strings.Split(b, ".")
-	n := len(aa)
-	if len(bb) > n {
-		n = len(bb)
-	}
-	for i := 0; i < n; i++ {
+	for i := range max(len(aa), len(bb)) {
 		var ai, bi int
 		if i < len(aa) {
 			ai, _ = strconv.Atoi(aa[i])
@@ -431,7 +423,7 @@ func (v *Validator) validateEventID(eventID string, g *compiledGroup, groupKnown
 	if !groupKnown || len(g.eventIDRules) == 0 {
 		return resUndefinedRule.description()
 	}
-	escaped := EscapeEventIDOrFieldValue(eventID)
+	escaped := escapeEventIDOrFieldValue(eventID)
 	if acceptRules(g.eventIDRules, escaped) == resAccepted {
 		return eventID
 	}
@@ -467,7 +459,7 @@ func (v *Validator) validateEventData(data map[string]any, g *compiledGroup, gro
 				continue
 			}
 		}
-		str := EscapeEventIDOrFieldValue(valueToString(raw))
+		str := escapeEventIDOrFieldValue(valueToString(raw))
 		switch acceptRules(rules, str) {
 		case resAccepted:
 			out[key] = raw
@@ -486,16 +478,16 @@ func (v *Validator) validateEventData(data map[string]any, g *compiledGroup, gro
 // are final; REJECTED is not, so a later rule can still accept.
 func acceptRules(rules []rule, value string) ruleResult {
 	var last ruleResult = resRejected
-	any := false
+	matched := false
 	for _, r := range rules {
 		res := r.validate(value)
 		if res == resAccepted || res == resIncorrectRule {
 			return res
 		}
 		last = res
-		any = true
+		matched = true
 	}
-	if !any {
+	if !matched {
 		return resRejected
 	}
 	return last
