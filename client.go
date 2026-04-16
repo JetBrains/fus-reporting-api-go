@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -18,14 +19,12 @@ const (
 	maxRetries    = 10
 )
 
-var retryableStatusCodes = map[int]bool{
-	408: true, // Request Timeout
-	429: true, // Too Many Requests
-	500: true, // Internal Server Error
-	502: true, // Bad Gateway
-	503: true, // Service Unavailable
-	504: true, // Gateway Timeout
-	598: true, // Network Read Timeout
+func isRetryable(code int) bool {
+	switch code {
+	case 408, 429, 500, 502, 503, 504, 598:
+		return true
+	}
+	return false
 }
 
 type Client struct {
@@ -34,12 +33,13 @@ type Client struct {
 	httpClient *http.Client
 }
 
-func NewClient(endpoint string, timeout time.Duration) *Client {
+func NewClient(endpoint string, timeout time.Duration, userAgent string) *Client {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
 	return &Client{
-		endpoint: endpoint,
+		endpoint:  endpoint,
+		userAgent: userAgent,
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
@@ -60,10 +60,12 @@ func (c *Client) Send(ctx context.Context, report Report) error {
 	var lastErr error
 	for attempt := range maxRetries + 1 {
 		if attempt > 0 {
+			timer := time.NewTimer(retryInterval)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return ctx.Err()
-			case <-time.After(retryInterval):
+			case <-timer.C:
 			}
 		}
 
@@ -73,7 +75,7 @@ func (c *Client) Send(ctx context.Context, report Report) error {
 		}
 		lastErr = err
 
-		if statusErr, ok := err.(*statusError); ok && retryableStatusCodes[statusErr.code] {
+		if statusErr, ok := errors.AsType[*statusError](err); ok && isRetryable(statusErr.code) {
 			continue
 		}
 		return err
@@ -118,10 +120,7 @@ func (e *statusError) Error() string {
 func (c *Client) SendBatched(ctx context.Context, events []LogEvent) (int, error) {
 	sent := 0
 	for i := 0; i < len(events); i += maxBatchSize {
-		end := i + maxBatchSize
-		if end > len(events) {
-			end = len(events)
-		}
+		end := min(i+maxBatchSize, len(events))
 		if err := c.Send(ctx, Report{Events: events[i:end]}); err != nil {
 			return sent, err
 		}

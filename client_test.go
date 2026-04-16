@@ -26,7 +26,7 @@ func TestClientSend(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 
 	report := Report{
 		Events: []LogEvent{
@@ -58,7 +58,7 @@ func TestClientSend(t *testing.T) {
 }
 
 func TestClientSendEmpty(t *testing.T) {
-	client := NewClient("http://should-not-be-called", 1*time.Second)
+	client := NewClient("http://should-not-be-called", 1*time.Second, "")
 	if err := client.Send(t.Context(), Report{}); err != nil {
 		t.Fatalf("send empty: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestClientSendError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 	err := client.Send(t.Context(), Report{Events: []LogEvent{{}}})
 	if err == nil {
 		t.Fatal("expected error for 400 response")
@@ -89,7 +89,7 @@ func TestClientSendRetriesTransientErrors(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 	err := client.Send(t.Context(), Report{Events: []LogEvent{{}}})
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
@@ -113,7 +113,7 @@ func TestClientSendBatched(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, 5*time.Second)
+	client := NewClient(server.URL, 5*time.Second, "")
 
 	events := make([]LogEvent, 1200)
 	for i := range events {
@@ -121,7 +121,6 @@ func TestClientSendBatched(t *testing.T) {
 			Recorder: Recorder{ID: "TC", Version: 1},
 			Event:    EventAction{ID: "test", Count: 1},
 		}
-		_ = i
 	}
 
 	sent, err := client.SendBatched(t.Context(), events)
