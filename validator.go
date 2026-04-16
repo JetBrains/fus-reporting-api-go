@@ -24,6 +24,7 @@ import (
 // Not ported (unused by the TeamCity CLI spec):
 //   - util#, expression, required:, default_value: rules
 //   - dictionary rules beyond plain enum
+//   - recursive validation of nested Map/List values in event_data
 //   - system_data / client_data / ids validation pipelines
 //   - anonymized_fields
 type Validator struct {
@@ -43,11 +44,11 @@ func NewPermissiveValidator() *Validator {
 }
 
 type compiledGroup struct {
-	id            string
-	buildRanges   []SchemeRange
-	versionRanges []SchemeRange
-	eventIDRules  []rule              // rules applied to event.id
-	eventDataRules map[string][]rule  // rules applied to data[key] for each scheme-declared key
+	id             string
+	buildRanges    []SchemeRange
+	versionRanges  []SchemeRange
+	eventIDRules   []rule            // rules applied to event.id
+	eventDataRules map[string][]rule // rules applied to data[key] for each scheme-declared key
 }
 
 type globalRules struct {
@@ -62,9 +63,9 @@ type ruleResult int
 
 const (
 	resAccepted      ruleResult = iota
-	resRejected                  // validation.unmatched_rule
-	resIncorrectRule             // validation.incorrect_rule
-	resUndefinedRule             // validation.undefined_rule
+	resRejected                 // validation.unmatched_rule
+	resIncorrectRule            // validation.incorrect_rule
+	resUndefinedRule            // validation.undefined_rule
 )
 
 // description maps a ruleResult to the JVM sentinel string.
@@ -168,13 +169,16 @@ func NewValidator(s *Scheme) (*Validator, error) {
 			eventDataRules: map[string][]rule{},
 		}
 		if gs.Rules != nil {
+			// Merge group-local enums/regexps/ranges on top of globals,
+			// mirroring JVM EventGroupRules.create + GlobalRulesHolder.
+			merged := mergeRules(g, gs.Rules)
 			for _, id := range gs.Rules.EventID {
-				cg.eventIDRules = append(cg.eventIDRules, parseRuleExpr(id, g))
+				cg.eventIDRules = append(cg.eventIDRules, parseRuleExpr(id, merged))
 			}
 			for key, exprs := range gs.Rules.EventData {
 				rules := make([]rule, 0, len(exprs))
 				for _, e := range exprs {
-					rules = append(rules, parseRuleExpr(e, g))
+					rules = append(rules, parseRuleExpr(e, merged))
 				}
 				if len(rules) > 0 {
 					cg.eventDataRules[key] = rules
@@ -211,6 +215,47 @@ func compileGlobalRules(r *SchemeRules) (*globalRules, error) {
 		g.ranges[k] = rng
 	}
 	return g, nil
+}
+
+// mergeRules overlays group-local enums/regexps/ranges on top of the compiled
+// globals so that enum#ref / regexp#ref inside a group can resolve both local
+// and scheme-level references. Mirrors JVM EventGroupRules.create which
+// receives both the GlobalRulesHolder and the group descriptor's own rules.
+func mergeRules(base *globalRules, local *SchemeRules) *globalRules {
+	if local == nil {
+		return base
+	}
+	hasLocal := len(local.Enums) > 0 || len(local.Regexps) > 0 || len(local.Ranges) > 0
+	if !hasLocal {
+		return base
+	}
+	m := &globalRules{
+		enums:   make(map[string][]string, len(base.enums)+len(local.Enums)),
+		regexps: make(map[string]*regexp.Regexp, len(base.regexps)+len(local.Regexps)),
+		ranges:  make(map[string]IntRange, len(base.ranges)+len(local.Ranges)),
+	}
+	for k, v := range base.enums {
+		m.enums[k] = v
+	}
+	for k, v := range base.regexps {
+		m.regexps[k] = v
+	}
+	for k, v := range base.ranges {
+		m.ranges[k] = v
+	}
+	// Local overrides global on collision, matching JVM behavior.
+	for k, v := range local.Enums {
+		m.enums[k] = v
+	}
+	for k, pat := range local.Regexps {
+		if compiled, err := regexp.Compile("^(?:" + pat + ")$"); err == nil {
+			m.regexps[k] = compiled
+		}
+	}
+	for k, v := range local.Ranges {
+		m.ranges[k] = v
+	}
+	return m
 }
 
 // parseRuleExpr mirrors ValidationSimpleRuleFactory.createSimpleRule. Only the
