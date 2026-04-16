@@ -17,10 +17,20 @@ type Scheme struct {
 	Groups  []GroupSchema `json:"groups"`
 }
 
+// GroupType distinguishes state collectors (per-device snapshots) from counter
+// collectors (occurrence counts).
+type GroupType string
+
+const (
+	GroupTypeCounter GroupType = "counter"
+	GroupTypeState   GroupType = "state"
+)
+
 // GroupSchema is one EventGroupRemoteDescriptor: the per-group rules plus the
 // build/version ranges that gate whether an event for this group is accepted.
 type GroupSchema struct {
 	ID               string            `json:"id"`
+	Type             GroupType         `json:"type,omitempty"`
 	Builds           []SchemeRange     `json:"builds,omitempty"`
 	Versions         []SchemeRange     `json:"versions,omitempty"`
 	Rules            *SchemeRules      `json:"rules,omitempty"`
