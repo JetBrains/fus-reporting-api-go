@@ -74,6 +74,9 @@ func osChar() byte {
 	}
 }
 
+// AnonymizedValueRegex matches the post-anonymization wire format: 64 hex chars + one-or-more #C/#S markers (mirrors the JVM HASH_PATTERN; coordinate any change with the metadata repo).
+const AnonymizedValueRegex = `[0-9a-f]{64}(#[SC])+`
+
 // Anonymize returns SHA-256(salt||value) as hex with a "#C" (client) suffix.
 // Blank/whitespace values pass through unchanged.
 func Anonymize(salt []byte, value string) string {

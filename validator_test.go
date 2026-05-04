@@ -323,6 +323,53 @@ func TestRuleExprHelpers(t *testing.T) {
 	}
 }
 
+// TestValidatorAcceptsAnonymizedHashForm proves the auto-injected hash rule lets a post-anonymization value (sha256 hex + #C / #S / #C#S markers) validate against the same schema that declares the pre-hash rule.
+func TestValidatorAcceptsAnonymizedHashForm(t *testing.T) {
+	s := &Scheme{
+		Version: "1",
+		Rules: &SchemeRules{
+			Regexps: map[string]string{"uuid": `[0-9a-f-]+`},
+		},
+		Groups: []GroupSchema{{
+			ID:   "g1",
+			Type: GroupTypeCounter,
+			Rules: &SchemeRules{
+				EventID: []string{EnumExpr("invoked")},
+				EventData: map[string][]string{
+					"session_id": {RegexpRefExpr("uuid")},
+				},
+			},
+			AnonymizedFields: []AnonymizedField{
+				{Event: "invoked", Fields: []string{"session_id"}},
+			},
+		}},
+	}
+	v, err := NewValidator(s)
+	if err != nil {
+		t.Fatalf("NewValidator: %v", err)
+	}
+
+	cases := map[string]string{
+		"raw uuid":     "050cd5ce-0b3f-44c9-90b3-c28af5cf97c5",
+		"hashed #C":    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef#C",
+		"hashed #S":    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef#S",
+		"hashed #C#S":  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef#C#S",
+	}
+	for name, value := range cases {
+		ev := LogEvent{
+			Group: EventGroup{ID: "g1", Version: 1},
+			Event: EventAction{ID: "invoked", Data: map[string]any{"session_id": value}},
+		}
+		got, drop := v.Validate(ev)
+		if drop {
+			t.Fatalf("%s: dropped, want kept", name)
+		}
+		if s, ok := got.Event.Data["session_id"].(string); !ok || strings.HasPrefix(s, "validation.") {
+			t.Errorf("%s: session_id rejected (= %v); auto-injected hash rule missing", name, got.Event.Data["session_id"])
+		}
+	}
+}
+
 func TestWriteSchemeJSON(t *testing.T) {
 	s := &Scheme{
 		Version: "1",

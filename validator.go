@@ -156,6 +156,7 @@ func NewValidator(s *Scheme) (*Validator, error) {
 		groups:  make(map[string]*compiledGroup, len(s.Groups)),
 		globals: g,
 	}
+	hashRule := regexpRule{pat: regexp.MustCompile("^(?:" + AnonymizedValueRegex + ")$")}
 	for _, gs := range s.Groups {
 		cg := &compiledGroup{
 			id:             gs.ID,
@@ -163,6 +164,7 @@ func NewValidator(s *Scheme) (*Validator, error) {
 			versionRanges:  gs.Versions,
 			eventDataRules: map[string][]rule{},
 		}
+		anonFields := collectAnonymizedFields(gs.AnonymizedFields)
 		if gs.Rules != nil {
 			// Merge group-local enums/regexps/ranges on top of globals,
 			// mirroring JVM EventGroupRules.create + GlobalRulesHolder.
@@ -171,9 +173,13 @@ func NewValidator(s *Scheme) (*Validator, error) {
 				cg.eventIDRules = append(cg.eventIDRules, parseRuleExpr(id, merged))
 			}
 			for key, exprs := range gs.Rules.EventData {
-				rules := make([]rule, 0, len(exprs))
+				rules := make([]rule, 0, len(exprs)+1)
 				for _, e := range exprs {
 					rules = append(rules, parseRuleExpr(e, merged))
+				}
+				// Anonymized fields hit the wire hashed; append the hash rule so post-anonymization values still validate.
+				if _, ok := anonFields[key]; ok {
+					rules = append(rules, hashRule)
 				}
 				if len(rules) > 0 {
 					cg.eventDataRules[key] = rules
@@ -183,6 +189,17 @@ func NewValidator(s *Scheme) (*Validator, error) {
 		v.groups[gs.ID] = cg
 	}
 	return v, nil
+}
+
+// collectAnonymizedFields returns the union of fields anonymized in any event within the group.
+func collectAnonymizedFields(afs []AnonymizedField) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, af := range afs {
+		for _, f := range af.Fields {
+			out[f] = struct{}{}
+		}
+	}
+	return out
 }
 
 func compileGlobalRules(r *SchemeRules) (*globalRules, error) {

@@ -77,8 +77,11 @@ func TestBuildEventsScheme(t *testing.T) {
 	if !sidField.ShouldBeAnonymized {
 		t.Error("session_id.shouldBeAnonymized = false, want true")
 	}
-	if sidField.Value[0] != "{regexp#uuid}" {
-		t.Errorf("session_id.value = %v, want [{regexp#uuid}]", sidField.Value)
+	if len(sidField.Value) != 2 || sidField.Value[0] != "{regexp#uuid}" {
+		t.Errorf("session_id.value = %v, want [{regexp#uuid}, {regexp:%s}]", sidField.Value, AnonymizedValueRegex)
+	}
+	if sidField.Value[1] != "{regexp:"+AnonymizedValueRegex+"}" {
+		t.Errorf("anonymized field missing auto-injected hash rule; got %v", sidField.Value)
 	}
 
 	// os should not be anonymized
