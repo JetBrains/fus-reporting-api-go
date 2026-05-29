@@ -99,10 +99,10 @@ func BuildEventsScheme(s *Scheme, cfg RecorderConfig, buildNumber string) (*Even
 						DataType:           "PRIMITIVE",
 						ShouldBeAnonymized: isAnonymized(path, anonFields),
 					}
-					// Anonymized fields hit the wire hashed; reference the metadata-global hash rule
-					// so AP-side validation accepts post-anonymization values without an inline regexp.
+					// Anonymized fields hit the wire hashed, so the only applicable validation rule is the
+					// metadata-global hash rule; the declared (pre-hash) rule never matches wire values.
 					if fd.ShouldBeAnonymized {
-						fd.Value = append(fd.Value, "{regexp#"+HashRuleRef+"}")
+						fd.Value = []string{"{regexp#" + HashRuleRef + "}"}
 					}
 					ed.Fields = append(ed.Fields, fd)
 				}

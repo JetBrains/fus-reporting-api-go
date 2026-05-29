@@ -77,11 +77,9 @@ func TestBuildEventsScheme(t *testing.T) {
 	if !sidField.ShouldBeAnonymized {
 		t.Error("session_id.shouldBeAnonymized = false, want true")
 	}
-	if len(sidField.Value) != 2 || sidField.Value[0] != "{regexp#uuid}" {
-		t.Errorf("session_id.value = %v, want [{regexp#uuid}, {regexp#%s}]", sidField.Value, HashRuleRef)
-	}
-	if sidField.Value[1] != "{regexp#"+HashRuleRef+"}" {
-		t.Errorf("anonymized field missing auto-injected hash rule reference; got %v", sidField.Value)
+	// Anonymized fields validate only against the global hash rule; the declared pre-hash rule is dropped.
+	if len(sidField.Value) != 1 || sidField.Value[0] != "{regexp#"+HashRuleRef+"}" {
+		t.Errorf("session_id.value = %v, want [{regexp#%s}]", sidField.Value, HashRuleRef)
 	}
 
 	// os should not be anonymized
