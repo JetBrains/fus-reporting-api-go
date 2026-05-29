@@ -77,6 +77,11 @@ func osChar() byte {
 // AnonymizedValueRegex matches the post-anonymization wire format: 64 hex chars + one-or-more #C/#S markers (mirrors the JVM HASH_PATTERN; coordinate any change with the metadata repo).
 const AnonymizedValueRegex = `[0-9a-f]{64}(#[SC])+`
 
+// HashRuleRef is the metadata-global regexp rule name for anonymized (hashed) values.
+// The events scheme references it as {regexp#hash} so the metadata pipeline applies its
+// maintained global rule instead of an inline regexp (which reads as a false change on every diff).
+const HashRuleRef = "hash"
+
 // Anonymize returns SHA-256(salt||value) as hex with a "#C" (client) suffix.
 // Blank/whitespace values pass through unchanged.
 func Anonymize(salt []byte, value string) string {
