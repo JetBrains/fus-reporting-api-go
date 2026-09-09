@@ -106,7 +106,7 @@ func (d *Definition) BuildEventsScheme(cfg RecorderConfig, buildNumber string) (
 		for _, e := range g.Events {
 			ed := ESEventDescriptor{Event: e.ID, Description: e.Description, Fields: []ESFieldDescriptor{}}
 			for _, f := range e.Fields {
-				fd := ESFieldDescriptor{Path: f.Path, Value: d.registrationRules(f.Rules), DataType: f.DataType, ShouldBeAnonymized: f.Anonymized, Description: f.Description}
+				fd := ESFieldDescriptor{Path: f.Path, Value: wrapBraces(f.Rules), DataType: f.DataType, ShouldBeAnonymized: f.Anonymized, Description: f.Description}
 				if fd.DataType == "" {
 					fd.DataType = "PRIMITIVE"
 				}
@@ -122,33 +122,6 @@ func (d *Definition) BuildEventsScheme(cfg RecorderConfig, buildNumber string) (
 	return es, nil
 }
 
-// registrationRules inlines local references and preserves external AP references.
-func (d *Definition) registrationRules(rules []string) []string {
-	out := wrapBraces(rules)
-	if d.Rules == nil {
-		return out
-	}
-	for i, expr := range out {
-		s := strings.TrimSuffix(strings.TrimPrefix(expr, "{"), "}")
-		if ref, ok := strings.CutPrefix(s, "enum#"); ok {
-			if values, found := d.Rules.Enums[ref]; found {
-				out[i] = "{" + EnumExpr(values...) + "}"
-			}
-		}
-		if ref, ok := strings.CutPrefix(s, "regexp#"); ok {
-			if pattern, found := d.Rules.Regexps[ref]; found {
-				out[i] = "{" + RegexpExpr(pattern) + "}"
-			}
-		}
-		if ref, ok := strings.CutPrefix(s, "range#"); ok {
-			if bounds, found := d.Rules.Ranges[ref]; found {
-				out[i] = "{" + RangeExpr(bounds.From, bounds.To) + "}"
-			}
-		}
-	}
-	return out
-}
-
 // BuildValidationScheme merges event rules per group for an embedded fallback.
 func (d *Definition) BuildValidationScheme() (*Scheme, error) {
 	if err := d.Validate(); err != nil {
@@ -161,7 +134,7 @@ func (d *Definition) BuildValidationScheme() (*Scheme, error) {
 			gs.Type = GroupTypeCounter
 		}
 		for _, e := range g.Events {
-			gs.Rules.EventID = append(gs.Rules.EventID, EnumExpr(e.ID))
+			gs.Rules.EventID = append(gs.Rules.EventID, "{"+EnumExpr(e.ID)+"}")
 			af := AnonymizedField{Event: e.ID}
 			for _, f := range e.Fields {
 				if f.DataType == "ARRAY" || strings.Contains(f.Path, ".") {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -119,7 +120,7 @@ func recorderScheme(cfg RecorderConfig) []ESRecorderDesc {
 	return []ESRecorderDesc{{
 		RecorderID:      cfg.RecorderID,
 		RecorderVersion: cfg.RecorderVersion,
-		IDs:             []ESRecorderFieldDesc{{Path: "device", Required: true}},
+		IDs:             []ESRecorderFieldDesc{{Path: "device", Required: true, Values: []string{"{regexp#" + HashRuleRef + "}"}}},
 		ClientData:      []ESRecorderFieldDesc{},
 		SystemData:      []ESRecorderFieldDesc{},
 	}}
@@ -135,9 +136,9 @@ func WriteEventsSchemeJSON(es *EventsScheme, w io.Writer) error {
 
 func extractGroupVersion(g GroupSchema) int {
 	if len(g.Versions) > 0 && g.Versions[0].From != "" {
-		var v int
-		fmt.Sscanf(g.Versions[0].From, "%d", &v)
-		return v
+		if v, err := strconv.Atoi(g.Versions[0].From); err == nil {
+			return v
+		}
 	}
 	return 1
 }
