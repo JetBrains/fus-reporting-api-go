@@ -15,6 +15,9 @@ go get github.com/JetBrains/fus-reporting-api-go
 
 ## Quick start
 
+This example uses the low-level runtime metadata API. For new integrations and
+registration schema generation, use the event declarations below.
+
 ```go
 import fus "github.com/JetBrains/fus-reporting-api-go"
 
@@ -122,7 +125,59 @@ func main() {
 }
 ```
 
-The same `Scheme` value goes to both `NewValidator` and `WriteSchemeJSON`, so runtime validation and the registered schema stay in sync.
+The same `Scheme` value goes to both `NewValidator` and `WriteSchemeJSON`, so the
+serialized runtime metadata matches the local validator. For event registration,
+generate `events-scheme.json` from declarations as described below.
+
+## Declaring events and generating registration metadata
+
+Use `Definition` for event-specific fields, like Kotlin's `EventLogGroup`.
+`Scheme` remains the group-level AP/CDN validation format.
+
+```go
+auth := fus.GroupDefinition{
+    ID: "cli.auth", Version: 1, Description: "Authentication",
+    Events: []fus.EventDefinition{
+        {
+            ID: "login.completed", Description: "Login result",
+            Fields: []fus.FieldDefinition{
+                {Path: "method", Rules: []string{fus.EnumExpr("token", "guest")}},
+            },
+        },
+        {
+            ID: "token.loaded", Description: "Token source",
+            Fields: []fus.FieldDefinition{
+                {Path: "source", Rules: []string{fus.EnumExpr("env", "keyring")}},
+            },
+        },
+    },
+}
+definition := &fus.Definition{Groups: []fus.GroupDefinition{auth}}
+
+registration, err := definition.BuildEventsScheme(cfg, buildNumber)
+if err != nil { /* handle error */ }
+err = fus.WriteEventsSchemeJSON(registration, output)
+if err != nil { /* handle error */ }
+
+fallback, err := definition.BuildValidationScheme()
+if err != nil { /* handle error */ }
+validator, err := fus.NewValidator(fallback)
+if err != nil { /* handle error */ }
+```
+
+Registration preserves each event's fields, descriptions and types. Local
+`Definition.Rules` references are inlined; external AP references are preserved.
+`Anonymized: true` emits `{regexp#hash}` and per-event fallback anonymization.
+Configure `NewAnonymizer` from the selected runtime scheme as usual.
+
+Fallback rules are unioned per group and restricted to its declared version.
+Use CDN metadata when available; fallback generation does not reproduce Data
+Office history/build ranges. Arrays and nested fields work in registration
+output but are rejected by fallback generation because the runtime validator
+does not support them yet. `Track` and runtime validation are unchanged.
+
+The old `fus.BuildEventsScheme(*Scheme, ...)` is deprecated: flattened metadata
+cannot recover field ownership. Migrate using actual event call sites.
 
 ## For JetBrains teams
 
