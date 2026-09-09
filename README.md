@@ -165,8 +165,9 @@ validator, err := fus.NewValidator(fallback)
 if err != nil { /* handle error */ }
 ```
 
-Registration preserves each event's fields, descriptions and types. Local
-`Definition.Rules` references are inlined; external AP references are preserved.
+Registration preserves each event's fields, descriptions, types and rule references.
+`Definition.Rules` supplies fallback definitions; referenced rules must also exist
+in AP metadata. Use inline rules when a shared AP rule is not intended.
 `Anonymized: true` emits `{regexp#hash}` and per-event fallback anonymization.
 Configure `NewAnonymizer` from the selected runtime scheme as usual.
 

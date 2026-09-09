@@ -51,8 +51,11 @@ func TestDefinitionPreservesEventFields(t *testing.T) {
 	if g.Schema[2].Fields == nil {
 		t.Fatal("fieldless event should serialize as [], not null")
 	}
-	if got := g.Schema[0].Fields[1].Value; !reflect.DeepEqual(got, []string{"{enum:true|false}"}) {
-		t.Fatalf("local enum not resolved: %v", got)
+	if got := g.Schema[0].Fields[1].Value; !reflect.DeepEqual(got, []string{"{enum#boolean}"}) {
+		t.Fatalf("enum reference changed: %v", got)
+	}
+	if got := es.RecorderScheme[0].IDs[0].Values; !reflect.DeepEqual(got, []string{"{regexp#hash}"}) {
+		t.Fatalf("device rules: %v", got)
 	}
 	if got := g.Schema[0].Fields[2]; !got.ShouldBeAnonymized || !reflect.DeepEqual(got.Value, []string{"{regexp#hash}"}) {
 		t.Fatalf("hashed field: %+v", got)
@@ -77,6 +80,9 @@ func TestDefinitionFallback(t *testing.T) {
 	s, err := d.BuildValidationScheme()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got := s.Groups[0].Rules.EventID; !reflect.DeepEqual(got, []string{"{enum:login.completed}", "{enum:token.loaded}", "{enum:cleared}"}) {
+		t.Fatalf("event ID rules: %v", got)
 	}
 	wire, err := json.Marshal(s)
 	if err != nil {
@@ -143,7 +149,7 @@ func TestDefinitionSharedRegistrationRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, want := range []string{"{regexp:[a-z]+}", "{range:1..5}", "{regexp#external}"} {
+	for i, want := range []string{"{regexp#local}", "{range#local}", "{regexp#external}"} {
 		if got := es.Scheme[0].Schema[0].Fields[i].Value; !reflect.DeepEqual(got, []string{want}) {
 			t.Fatalf("rule %d = %v, want %s", i, got, want)
 		}
