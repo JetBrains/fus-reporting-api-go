@@ -54,9 +54,7 @@ type ESRecorderFieldDesc struct {
 	Values   []string `json:"values,omitempty"`
 }
 
-// BuildEventsScheme converts a Scheme into the EventsScheme format used by the
-// FUS metadata team. The recorder config supplies recorder-level fields (ids,
-// client_data, system_data).
+// Deprecated: use Definition.BuildEventsScheme; Scheme cannot preserve event-specific fields.
 func BuildEventsScheme(s *Scheme, cfg RecorderConfig, buildNumber string) (*EventsScheme, error) {
 	if s == nil {
 		return nil, fmt.Errorf("fus: nil scheme")
@@ -112,15 +110,19 @@ func BuildEventsScheme(s *Scheme, cfg RecorderConfig, buildNumber string) (*Even
 		es.Scheme = append(es.Scheme, gd)
 	}
 
-	es.RecorderScheme = []ESRecorderDesc{{
+	es.RecorderScheme = recorderScheme(cfg)
+
+	return es, nil
+}
+
+func recorderScheme(cfg RecorderConfig) []ESRecorderDesc {
+	return []ESRecorderDesc{{
 		RecorderID:      cfg.RecorderID,
 		RecorderVersion: cfg.RecorderVersion,
 		IDs:             []ESRecorderFieldDesc{{Path: "device", Required: true}},
 		ClientData:      []ESRecorderFieldDesc{},
 		SystemData:      []ESRecorderFieldDesc{},
 	}}
-
-	return es, nil
 }
 
 // WriteEventsSchemeJSON serializes an EventsScheme to w as indented JSON.
