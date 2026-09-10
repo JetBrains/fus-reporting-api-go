@@ -6,6 +6,7 @@ import (
 	"errors"
 	"maps"
 	"reflect"
+	"slices"
 	"sync"
 	"time"
 )
@@ -64,7 +65,7 @@ func WithValidator(v *Validator) LoggerOption {
 }
 
 // WithAnonymizer installs the field anonymizer. When set, event_data fields
-// declared in the scheme's anonymized_fields are hashed before buffering.
+// declared in the scheme's anonymized_fields are hashed before validation.
 func WithAnonymizer(a *Anonymizer) LoggerOption {
 	return func(l *Logger) { l.anonymizer = a }
 }
@@ -145,7 +146,8 @@ func loadOrFetchConfigCtx(ctx context.Context, recorderID, productCode, productV
 // callback is registered. Events with more than MaxDataFields entries are
 // dropped.
 //
-// Pipeline: raw event -> validator -> anonymizer -> escaper -> disk buffer.
+// Track preserves the caller's data, including nested maps and slices.
+// Pipeline: copy data -> anonymizer -> validator -> escaper -> disk buffer.
 func (l *Logger) Track(group EventGroup, eventID string, data map[string]any) {
 	if len(data) > MaxDataFields {
 		if l.onDrop != nil {
@@ -175,6 +177,11 @@ func (l *Logger) Track(group EventGroup, eventID string, data map[string]any) {
 		Event:    EventAction{ID: eventID, Data: data, Count: 1},
 	}
 
+	if l.anonymizer != nil {
+		event.Event.Data = cloneEventData(data)
+		l.anonymizer.AnonymizeEvent(&event)
+	}
+
 	if l.validator != nil {
 		validated, drop := l.validator.Validate(event)
 		if drop {
@@ -186,13 +193,33 @@ func (l *Logger) Track(group EventGroup, eventID string, data map[string]any) {
 		event = validated
 	}
 
-	if l.anonymizer != nil {
-		l.anonymizer.AnonymizeEvent(&event)
-	}
-
 	event = escapeLogEvent(event)
 	if err := l.buf.Append(event); err != nil && l.onDrop != nil {
 		l.onDrop(group.ID, eventID, DropBufferError)
+	}
+}
+
+// cloneEventData copies the maps and slices that the anonymizer can change.
+func cloneEventData(data map[string]any) map[string]any {
+	result := maps.Clone(data)
+	for key, value := range result {
+		result[key] = cloneEventDataValue(value)
+	}
+	return result
+}
+
+func cloneEventDataValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		return cloneEventData(value)
+	case []any:
+		result := slices.Clone(value)
+		for i, item := range result {
+			result[i] = cloneEventDataValue(item)
+		}
+		return result
+	default:
+		return value
 	}
 }
 
