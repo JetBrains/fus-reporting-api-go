@@ -73,10 +73,11 @@ See `example_test.go` for a runnable version that prints the full JSON payload.
 ## How it works
 
 ```text
-Track()  ──▶  validate  ──▶  escape  ──▶  buffer (JSONL on disk)  ──▶  Flush()  ──▶  FUS
+Track()  ──▶  anonymize  ──▶  validate  ──▶  escape  ──▶  buffer (JSONL on disk)  ──▶  Flush()  ──▶  FUS
 ```
 
 - **Track** appends one JSON line to a local buffer file. No network call.
+- **Anonymize** hashes declared fields before validation and preserves the caller’s data.
 - **Validate** rewrites events so only scheme-approved keys and values reach the wire.
   Unrecognized keys/values are replaced with sentinels; out-of-range events are dropped.
 - **Escape** normalizes strings for wire safety.
@@ -169,13 +170,15 @@ Registration preserves each event's fields, descriptions, types and rule referen
 `Definition.Rules` supplies fallback definitions; referenced rules must also exist
 in AP metadata. Use inline rules when a shared AP rule is not intended.
 `Anonymized: true` emits `{regexp#hash}` and per-event fallback anonymization.
-Configure `NewAnonymizer` from the selected runtime scheme as usual.
+Configure `NewAnonymizer` from the local declaration’s fallback schema.
+Use the selected runtime scheme for `NewValidator`, including CDN metadata when available.
+Anonymized fields are validated as hashes; ordinary fields retain their existing validation.
 
 Fallback rules are unioned per group and restricted to its declared version.
 Use CDN metadata when available; fallback generation does not reproduce Data
 Office history/build ranges. Arrays and nested fields work in registration
 output but are rejected by fallback generation because the runtime validator
-does not support them yet. `Track` and runtime validation are unchanged.
+does not support them yet.
 
 The old `fus.BuildEventsScheme(*Scheme, ...)` is deprecated: flattened metadata
 cannot recover field ownership. Migrate using actual event call sites.
