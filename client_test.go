@@ -2,6 +2,7 @@ package fus
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -132,5 +133,40 @@ func TestClientSendBatched(t *testing.T) {
 	}
 	if batchCount != 3 {
 		t.Errorf("batch count = %d, want 3", batchCount)
+	}
+}
+
+func TestClientSendIncludesEmptyDataObject(t *testing.T) {
+	for _, data := range []map[string]any{nil, {}} {
+		t.Run(fmt.Sprintf("nil=%t", data == nil), func(t *testing.T) {
+			requests := make(chan []byte, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+				}
+				requests <- body
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer server.Close()
+			client := NewClient(server.URL, time.Second, "")
+			report := Report{Events: []LogEvent{{Event: EventAction{ID: "state.collected", Count: 1, Data: data}}}}
+			if err := client.Send(t.Context(), report); err != nil {
+				t.Fatal(err)
+			}
+			var received struct {
+				Events []struct {
+					Event struct {
+						Data json.RawMessage `json:"data"`
+					} `json:"event"`
+				} `json:"events"`
+			}
+			if err := json.Unmarshal(<-requests, &received); err != nil {
+				t.Fatal(err)
+			}
+			if len(received.Events) != 1 || string(received.Events[0].Event.Data) != "{}" {
+				t.Fatalf("the request must contain one event with data: {}: %+v", received)
+			}
+		})
 	}
 }

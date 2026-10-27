@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -362,5 +363,44 @@ func TestGroupHelpers(t *testing.T) {
 	sg := StateGroup("cli.os", 3)
 	if sg.ID != "cli.os" || sg.Version != 3 || sg.State != true {
 		t.Errorf("StateGroup() = %+v", sg)
+	}
+}
+
+func TestLoggerFlushRepairsLegacyEmptyData(t *testing.T) {
+	for _, action := range []string{
+		`{"id":"state.collected","count":1}`,
+		`{"id":"state.collected","count":1,"data":null}`,
+	} {
+		t.Run(action, func(t *testing.T) {
+			requests := make(chan []byte, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+				}
+				requests <- body
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer server.Close()
+			logger := newTestLogger(t, server)
+			legacy := `{"group":{"id":"test","version":1,"state":true},"event":` + action + "}\n"
+			if err := os.WriteFile(logger.buf.path, []byte(legacy), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := logger.Flush(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			var report Report
+			if err := json.Unmarshal(<-requests, &report); err != nil {
+				t.Fatal(err)
+			}
+			if len(report.Events) != 1 {
+				t.Fatalf("sent %d events, want 1", len(report.Events))
+			}
+			event := report.Events[0].Event
+			if event.Data == nil || len(event.Data) != 0 || event.ID != "state.collected" || event.Count != 1 {
+				t.Fatalf("the legacy event must retain its identity and contain an empty data object: %+v", event)
+			}
+		})
 	}
 }

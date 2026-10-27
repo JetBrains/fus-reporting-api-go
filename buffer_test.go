@@ -32,6 +32,9 @@ func TestBufferAppendAndRead(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("events = %d, want 2", len(events))
 	}
+	if events[0].Event.Data == nil {
+		t.Fatal("the buffer must persist an empty data object")
+	}
 	if events[0].Event.ID != "e1" {
 		t.Errorf("events[0].event.id = %q, want e1", events[0].Event.ID)
 	}
