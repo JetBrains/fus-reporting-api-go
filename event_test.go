@@ -161,3 +161,36 @@ func TestRoundTrip(t *testing.T) {
 		t.Errorf("event.data.method = %v, want %v", decoded.Event.Data["method"], original.Event.Data["method"])
 	}
 }
+
+func TestEventActionAlwaysIncludesDataObject(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		data map[string]any
+		want string
+	}{
+		{name: "nil", want: `{}`},
+		{name: "empty", data: map[string]any{}, want: `{}`},
+		{name: "populated", data: map[string]any{"enabled": false}, want: `{"enabled":false}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			event := EventAction{ID: "state.collected", Data: test.data, Count: 1}
+			encoded, err := json.Marshal(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(fields["data"]); got != test.want {
+				t.Fatalf("data = %q, want %s", got, test.want)
+			}
+			if string(fields["id"]) != `"state.collected"` || string(fields["count"]) != "1" {
+				t.Fatalf("the event identity changed: %s", encoded)
+			}
+			if test.data == nil && event.Data != nil {
+				t.Fatal("serialization changed the caller's nil map")
+			}
+		})
+	}
+}

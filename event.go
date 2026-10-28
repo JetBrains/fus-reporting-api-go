@@ -1,5 +1,7 @@
 package fus
 
+import "encoding/json"
+
 type Recorder struct {
 	ID      string `json:"id"`
 	Version int    `json:"version"`
@@ -13,8 +15,18 @@ type EventGroup struct {
 
 type EventAction struct {
 	ID    string         `json:"id"`
-	Data  map[string]any `json:"data,omitempty"`
+	Data  map[string]any `json:"data"`
 	Count int            `json:"count"`
+}
+
+// MarshalJSON always includes a data object, including when Data is nil.
+func (e EventAction) MarshalJSON() ([]byte, error) {
+	type action EventAction
+	value := action(e)
+	if value.Data == nil {
+		value.Data = map[string]any{}
+	}
+	return json.Marshal(value)
 }
 
 // LogEvent is a single LION v4 wire-format event.
